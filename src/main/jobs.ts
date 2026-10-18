@@ -557,3 +557,15 @@ export async function removeJob(id: string): Promise<void> {
   }
   jobs.splice(index, 1)
 }
+
+/** 批量移出队列：只删列表不删文件；运行中的任务由行内“取消”处理，这里跳过 */
+export function removeJobs(ids: string[]): string[] {
+  const removed: string[] = []
+  for (const id of ids) {
+    const index = jobs.findIndex((job) => job.id === id)
+    if (index === -1 || jobs[index].status === 'running') continue
+    jobs.splice(index, 1)
+    removed.push(id)
+  }
+  return removed
+}

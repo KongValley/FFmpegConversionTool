@@ -71,7 +71,7 @@ function reveal(): void {
         <span class="job__name" :title="job.inputPath">{{ fileName }}</span>
         <span class="pill" :class="pillClass">{{ statusText }}</span>
         <input
-          v-if="job.status === 'queued'"
+          v-if="job.status !== 'running'"
           class="job__select"
           type="checkbox"
           :checked="selectedIds.has(job.id)"

@@ -7,6 +7,7 @@ export const IPC = {
   jobsStart: 'jobs:start',
   jobsCancel: 'jobs:cancel',
   jobsRemove: 'jobs:remove',
+  jobsRemoveMany: 'jobs:remove-many',
   jobsRetry: 'jobs:retry',
   jobsUpdate: 'jobs:update',
   appGetVersion: 'app:get-version',

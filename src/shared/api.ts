@@ -13,6 +13,7 @@ export interface MediaConverterApi {
     start(): Promise<void>
     cancel(id: string): Promise<void>
     remove(id: string): Promise<void>
+    removeMany(ids: string[]): Promise<string[]>
     retry(id: string): Promise<Job | null>
     onUpdate(callback: (job: Job) => void): () => void
   }

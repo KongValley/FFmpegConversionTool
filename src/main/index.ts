@@ -11,6 +11,7 @@ import {
   enqueueMerge,
   getQueueProgress,
   removeJob,
+  removeJobs,
   retryJob,
   setDrainListener,
   setJobListener,
@@ -96,6 +97,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.jobsCancel, (_event, id: string) => cancelJob(id))
   ipcMain.handle(IPC.jobsRemove, (_event, id: string) => removeJob(id))
+  ipcMain.handle(IPC.jobsRemoveMany, (_event, ids: string[]) => removeJobs(ids))
   ipcMain.handle(IPC.jobsRetry, (_event, id: string) => retryJob(id))
   ipcMain.handle(IPC.appGetVersion, () => app.getVersion())
   ipcMain.handle(IPC.dialogPickFiles, async () => {

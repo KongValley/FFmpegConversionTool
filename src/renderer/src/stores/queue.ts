@@ -19,6 +19,7 @@ function upsert(job: Job): void {
   const index = state.jobs.findIndex((j) => j.id === job.id)
   if (index === -1) state.jobs.push(job)
   else state.jobs[index] = job
+  if (job.status === 'running') selectedIds.delete(job.id)
 }
 
 export function currentOptions(): EncodeOptions {
@@ -94,6 +95,19 @@ export async function startQueue(): Promise<void> {
 export const selectedIds = reactive(new Set<string>())
 export const selectedCount = computed(() => selectedIds.size)
 
+/** 选中里仍是“等待中”的数量：合并只用这些 */
+export const selectedQueuedCount = computed(
+  () => state.jobs.filter((job) => selectedIds.has(job.id) && job.status === 'queued').length
+)
+export const failedCount = computed(() => state.jobs.filter((job) => job.status === 'error').length)
+/** 可勾选行：除运行中外都可以选中（供移除/合并） */
+export const selectableIds = computed(() =>
+  state.jobs.filter((job) => job.status !== 'running').map((job) => job.id)
+)
+export const allSelected = computed(
+  () => selectableIds.value.length > 0 && selectableIds.value.every((id) => selectedIds.has(id))
+)
+
 export function toggleSelection(id: string): void {
   if (selectedIds.has(id)) selectedIds.delete(id)
   else selectedIds.add(id)
@@ -103,9 +117,41 @@ export function clearSelection(): void {
   selectedIds.clear()
 }
 
+/** 全选 / 取消全选（只作用于可勾选行） */
+export function toggleSelectAll(): void {
+  if (allSelected.value) clearSelection()
+  else for (const id of selectableIds.value) selectedIds.add(id)
+}
+
+async function removeIds(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0
+  const removed = await window.api.jobs.removeMany(ids)
+  const gone = new Set(removed)
+  state.jobs = state.jobs.filter((job) => !gone.has(job.id))
+  for (const id of gone) selectedIds.delete(id)
+  return removed.length
+}
+
+/** 移除勾选的任务（运行中的行没有复选框，主进程也会跳过） */
+export async function removeSelected(): Promise<number> {
+  return removeIds([...selectedIds])
+}
+
+/** 清空队列：移除所有非运行任务，运行中的继续转换；只删列表不删文件 */
+export async function clearQueue(): Promise<number> {
+  return removeIds(selectableIds.value)
+}
+
+/** 逐行重试所有失败任务（复用既有 retry IPC） */
+export async function retryFailed(): Promise<number> {
+  const ids = state.jobs.filter((job) => job.status === 'error').map((job) => job.id)
+  for (const id of ids) await retryJob(id)
+  return ids.length
+}
+
 /** 合并所选任务：主进程移除原任务并新建合并任务，界面同步移除后再插入合并任务 */
 export async function mergeSelected(): Promise<number> {
-  const ids = [...selectedIds]
+  const ids = state.jobs.filter((job) => selectedIds.has(job.id) && job.status === 'queued').map((job) => job.id)
   const merged = await window.api.jobs.merge(ids, currentOptions())
   const picked = new Set(ids)
   state.jobs = state.jobs.filter((entry) => !picked.has(entry.id))
@@ -135,10 +181,6 @@ export async function cancelAll(): Promise<void> {
   for (const job of state.jobs) {
     if (job.status === 'queued' || job.status === 'running') await cancelJob(job.id)
   }
-}
-
-export function clearFinished(): void {
-  state.jobs = state.jobs.filter((job) => job.status === 'queued' || job.status === 'running')
 }
 
 export async function updateSettings(patch: Partial<Settings>): Promise<void> {

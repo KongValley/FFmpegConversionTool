@@ -382,6 +382,32 @@ body {
 
 /* ---------- 队列 ---------- */
 
+.queue__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.queue__bar-spacer {
+  flex: 1;
+}
+
+.queue__select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.queue__select-all input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
 .queue {
   flex: 1;
   min-height: 0;

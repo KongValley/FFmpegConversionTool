@@ -24,6 +24,7 @@ const api: MediaConverterApi = {
     start: () => ipcRenderer.invoke(IPC.jobsStart) as Promise<void>,
     cancel: (id: string) => ipcRenderer.invoke(IPC.jobsCancel, id) as Promise<void>,
     remove: (id: string) => ipcRenderer.invoke(IPC.jobsRemove, id) as Promise<void>,
+    removeMany: (ids: string[]) => ipcRenderer.invoke(IPC.jobsRemoveMany, ids) as Promise<string[]>,
     retry: (id: string) => ipcRenderer.invoke(IPC.jobsRetry, id) as Promise<Job | null>,
     onUpdate: (callback) => on<Job>(IPC.jobsUpdate, callback)
   },

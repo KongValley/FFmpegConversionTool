@@ -6,14 +6,21 @@ import ConvertSettings from './components/ConvertSettings.vue'
 import { PRESETS } from '@shared/presets'
 import {
   addFiles,
+  allSelected,
   cancelAll,
-  clearFinished,
+  clearQueue,
   clearSelection,
+  failedCount,
   init,
   mergeSelected,
+  removeSelected,
+  retryFailed,
+  selectableIds,
   selectedCount,
+  selectedQueuedCount,
   startQueue,
-  state
+  state,
+  toggleSelectAll
 } from '@renderer/stores/queue'
 
 const errorText = ref('')
@@ -85,10 +92,37 @@ async function start(): Promise<void> {
 }
 
 async function merge(): Promise<void> {
-  const count = selectedCount.value
+  const count = selectedQueuedCount.value
   try {
     await mergeSelected()
     showNotice(`已合并 ${count} 个文件，开始转换`)
+  } catch (error) {
+    showError(error)
+  }
+}
+
+async function removeSelectedJobs(): Promise<void> {
+  try {
+    const count = await removeSelected()
+    if (count > 0) showNotice(`已移除 ${count} 项`)
+  } catch (error) {
+    showError(error)
+  }
+}
+
+async function clearAllJobs(): Promise<void> {
+  try {
+    const count = await clearQueue()
+    if (count > 0) showNotice(`已清空 ${count} 项（文件未删除）`)
+  } catch (error) {
+    showError(error)
+  }
+}
+
+async function retryFailedJobs(): Promise<void> {
+  try {
+    const count = await retryFailed()
+    if (count > 0) showNotice(`已重试 ${count} 项`)
   } catch (error) {
     showError(error)
   }
@@ -179,18 +213,49 @@ onUnmounted(() => {
           <button
             type="button"
             class="btn"
-            :disabled="selectedCount < 2 || !ffmpegReady || busy || !videoPreset"
+            :disabled="selectedQueuedCount < 2 || !ffmpegReady || busy || !videoPreset"
             @click="merge"
           >
-            合并所选 ({{ selectedCount }})
+            合并所选 ({{ selectedQueuedCount }})
           </button>
           <button type="button" class="btn btn--ghost" :disabled="!busy" @click="cancelAll">取消全部</button>
-          <button type="button" class="btn btn--ghost" @click="clearFinished">清空已完成</button>
           <span class="toolbar__spacer"></span>
           <span class="count-chip">队列 {{ state.jobs.length }} 项</span>
         </div>
         <div v-if="errorText" class="alert">{{ errorText }}</div>
         <div v-if="noticeText" class="notice">{{ noticeText }}</div>
+        <div v-if="state.jobs.length > 0" class="queue__bar">
+          <label class="queue__select-all">
+            <input
+              type="checkbox"
+              :checked="allSelected"
+              :indeterminate="!allSelected && selectedCount > 0"
+              @change="toggleSelectAll"
+            />
+            <span>全选（{{ selectedCount }}/{{ selectableIds.length }}）</span>
+          </label>
+          <span class="queue__bar-spacer"></span>
+          <button v-if="failedCount > 0" type="button" class="btn btn--small" @click="retryFailedJobs">
+            重试全部失败 ({{ failedCount }})
+          </button>
+          <button
+            type="button"
+            class="btn btn--small btn--ghost"
+            :disabled="selectedCount === 0"
+            @click="removeSelectedJobs"
+          >
+            移除所选 ({{ selectedCount }})
+          </button>
+          <button
+            type="button"
+            class="btn btn--small btn--ghost"
+            :disabled="selectableIds.length === 0"
+            title="只移除列表，不删除已转换的文件；运行中的任务会继续转换"
+            @click="clearAllJobs"
+          >
+            清空队列
+          </button>
+        </div>
         <QueueList />
       </section>
 
