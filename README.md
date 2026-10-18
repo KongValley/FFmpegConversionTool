@@ -125,4 +125,6 @@ scripts/      smoke.ts（真实转码验证）、make-icon.mjs（生成应用图
 
 ## 许可
 
-未声明开源许可（`package.json` 为 `UNLICENSED`）。如需开源或对外分发，请先补充许可证。
+本项目以 [MIT 许可证](LICENSE) 发布，Copyright (c) 2026 KongValley。
+
+FFmpeg 不随本项目分发：程序首次启动时从 BtbN 官方构建下载 `ffmpeg-master-latest-win64-gpl.zip`（遵循 GPL），仅作为独立进程调用；若用 `FFMPEG_DIR` 指定自备构建，请遵守该构建的许可条款。
