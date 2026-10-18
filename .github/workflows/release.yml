@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      # npm run smoke 需要 NVIDIA GPU（NVENC/NVDEC）与 ~200MB FFmpeg 下载，CI 运行器不满足，只在本机执行
+      - name: 单元测试
+        run: npm test
+
+      - name: 校验 package.json 版本与 tag 一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          if ($version -ne $tag) { throw "package.json 版本 $version 与 tag $tag 不一致" }
+          Write-Output "版本 $version 校验通过"
+
+      - name: 打包并发布 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run dist:publish
+
+      - name: 打包（手动触发，仅产出构建物）
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run dist
+
+      - name: 上传构建物（手动触发）
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-converter-win-x64
+          path: release/*.zip
+          if-no-files-found: error

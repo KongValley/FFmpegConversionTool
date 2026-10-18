@@ -5,6 +5,10 @@
   "description": "音视频转换工具（Electron + FFmpeg，NVENC 硬件加速）",
   "author": "local",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KongValley/FFmpegConversionTool.git"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -12,7 +16,8 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "test": "tsx --test test/*.test.ts",
     "smoke": "tsx scripts/smoke.ts",
-    "dist": "electron-vite build && electron-builder --win --x64 --publish never"
+    "dist": "electron-vite build && electron-builder --win --x64 --publish never",
+    "dist:publish": "electron-vite build && electron-builder --win --x64 --publish always"
   },
   "dependencies": {
     "vue": "3.5.44"

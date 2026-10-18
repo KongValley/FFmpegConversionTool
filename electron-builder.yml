@@ -13,3 +13,8 @@ win:
       arch:
         - x64
   artifactName: media-converter-${version}-win-x64.${ext}
+publish:
+  provider: github
+  owner: KongValley
+  repo: FFmpegConversionTool
+  releaseType: release

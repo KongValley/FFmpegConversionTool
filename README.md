@@ -22,7 +22,7 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 
 ## 快速开始
 
-1. 从仓库 Releases（或 `npm run dist` 产物）取得 `media-converter-<版本>-win-x64.zip`。
+1. 从 GitHub Releases 下载 `media-converter-<版本>-win-x64.zip`（由 GitHub Actions 自动构建）。
 2. 解压到独立文件夹，运行 `音视频转换工具.exe`（免安装，zip 根目录即程序文件）。
 3. 首次启动会自动下载并校验 FFmpeg，看到顶栏显示 `FFmpeg <版本> · GPU：NVENC …` 即可使用。
 
@@ -72,6 +72,19 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 |---|---|
 | `FFMPEG_DIR` | 直接指定含 `ffmpeg.exe` / `ffprobe.exe` 的目录，跳过下载（目录缺文件会明确报错） |
 | `FFMPEG_ZIP_PATH` | 指定本地 `ffmpeg-master-latest-win64-gpl.zip`，跳过网络下载 |
+
+## 发布
+
+日常使用本地打包即可，GitHub Release 由云端 Actions 生成：
+
+| 场景 | 操作 | 结果 |
+|---|---|---|
+| 本地自用 | `npm run dist` | 只在 `release/` 生成 zip，不发布（`--publish never`） |
+| 云端发布 | `git tag v0.1.0 && git push origin v0.1.0` | 触发 `.github/workflows/release.yml`：类型检查 + 单元测试 → 打包 → 发布 GitHub Release（附件即 zip） |
+| 仅构建不发版 | Actions 页面手动 `Run workflow` | 上传构建物到该次运行的 Artifacts，不创建 Release |
+
+- 打 tag 前请同步 `package.json` 的 `version`：CI 会校验两者一致，不一致直接失败。
+- `npm run smoke`（真实 NVENC/NVDEC 转码）需要 NVIDIA 显卡，只在本地执行，CI 不跑。
 
 ## 开发
 
