@@ -8,8 +8,10 @@ import {
   addFiles,
   allSelected,
   cancelAll,
+  clearDone,
   clearQueue,
   clearSelection,
+  doneCount,
   failedCount,
   init,
   mergeSelected,
@@ -120,6 +122,15 @@ async function clearAllJobs(): Promise<void> {
   try {
     const count = await clearQueue()
     if (count > 0) showNotice(`已清空 ${count} 项（文件未删除）`)
+  } catch (error) {
+    showError(error)
+  }
+}
+
+async function clearDoneJobs(): Promise<void> {
+  try {
+    const count = await clearDone()
+    if (count > 0) showNotice(`已清空 ${count} 项已完成（文件未删除）`)
   } catch (error) {
     showError(error)
   }
@@ -255,7 +266,7 @@ onUnmounted(() => {
             {{ state.paused ? '继续队列' : '暂停全部' }}
           </button>
           <span class="toolbar__spacer"></span>
-          <span class="count-chip">队列 {{ state.jobs.length }} 项</span>
+          <span class="count-chip">队列 {{ state.jobs.length }} 项 · 已完成 {{ doneCount }} 项</span>
         </div>
         <div v-if="errorText" class="alert">{{ errorText }}</div>
         <div v-if="noticeText" class="notice">{{ noticeText }}</div>
@@ -281,6 +292,15 @@ onUnmounted(() => {
             @click="removeSelectedJobs"
           >
             移除所选 ({{ selectedCount }})
+          </button>
+          <button
+            type="button"
+            class="btn btn--small btn--ghost"
+            :disabled="doneCount === 0"
+            title="只移除列表，不删除已转换的文件"
+            @click="clearDoneJobs"
+          >
+            清空已完成 ({{ doneCount }})
           </button>
           <button
             type="button"

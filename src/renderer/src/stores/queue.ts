@@ -115,6 +115,7 @@ export const selectedQueuedCount = computed(
   () => state.jobs.filter((job) => selectedIds.has(job.id) && job.status === 'queued').length
 )
 export const failedCount = computed(() => state.jobs.filter((job) => job.status === 'error').length)
+export const doneCount = computed(() => state.jobs.filter((job) => job.status === 'done').length)
 /** 可勾选行：除运行中外都可以选中（供移除/合并） */
 export const selectableIds = computed(() =>
   state.jobs.filter((job) => job.status !== 'running').map((job) => job.id)
@@ -155,6 +156,11 @@ export async function removeSelected(): Promise<number> {
 /** 清空队列：移除所有非运行任务，运行中的继续转换；只删列表不删文件 */
 export async function clearQueue(): Promise<number> {
   return removeIds(selectableIds.value)
+}
+
+/** 清空已完成：只移除列表里已完成的任务，不删已转换的文件 */
+export async function clearDone(): Promise<number> {
+  return removeIds(state.jobs.filter((job) => job.status === 'done').map((job) => job.id))
 }
 
 /** 逐行重试所有失败任务（复用既有 retry IPC） */
