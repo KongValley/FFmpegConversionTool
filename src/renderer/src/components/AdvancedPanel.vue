@@ -40,11 +40,37 @@ const resolutionChoice = computed({
   }
 })
 
-const fpsInput = ref(state.advanced.fps === null ? '' : String(state.advanced.fps))
-watch(fpsInput, (value) => {
-  const n = Number(value)
-  state.advanced.fps = value.trim() !== '' && Number.isFinite(n) && n > 0 ? n : null
+const fpsInput = computed({
+  get: () => (state.advanced.fps === null ? '' : String(state.advanced.fps)),
+  set: (value: string | number) => {
+    // type=number 的 v-model 会直接给出数字，只有清空才是空字符串
+    const n = Number(value)
+    state.advanced.fps = value === '' || !Number.isFinite(n) || n <= 0 ? null : n
+  }
 })
+
+/** 空值落回 null（= 不裁剪）；number 输入框可能直接给出数字 */
+function numberOrNull(value: string | number): number | null {
+  if (typeof value === 'string' && value.trim() === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+const trimStartInput = computed({
+  get: () => (state.advanced.trimStartSec === null ? '' : String(state.advanced.trimStartSec)),
+  set: (value: string | number) => {
+    state.advanced.trimStartSec = numberOrNull(value)
+  }
+})
+
+const trimEndInput = computed({
+  get: () => (state.advanced.trimEndSec === null ? '' : String(state.advanced.trimEndSec)),
+  set: (value: string | number) => {
+    state.advanced.trimEndSec = numberOrNull(value)
+  }
+})
+
+const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:\d+$/.test(state.advanced.crop))
 </script>
 
 <template>
@@ -139,6 +165,47 @@ watch(fpsInput, (value) => {
         :disabled="copyMode"
       />
     </label>
+
+    <div v-if="!isImage" class="field">
+      <span class="field__label">剪辑</span>
+      <div class="field__row">
+        <span class="muted">起点</span>
+        <input
+          v-model="trimStartInput"
+          class="input input--number"
+          type="number"
+          min="0"
+          step="0.1"
+          placeholder="从头"
+        />
+        <span class="muted">秒 → 终点</span>
+        <input v-model="trimEndInput" class="input input--number" type="number" min="0" step="0.1" placeholder="到结尾" />
+        <span class="muted">秒</span>
+      </div>
+      <label v-if="showAudio" class="radio">
+        <input v-model="state.advanced.normalizeAudio" type="checkbox" />
+        <span>音量归一化（-16 LUFS 单遍 loudnorm）</span>
+      </label>
+      <span v-if="copyMode" class="field__hint muted">复制模式支持时间裁剪，但不支持画面滤镜</span>
+    </div>
+
+    <div v-if="!isAudio" class="field">
+      <span class="field__label">画面</span>
+      <select v-model="state.advanced.rotate" class="input" :disabled="copyMode">
+        <option :value="0">不旋转</option>
+        <option :value="90">顺时针 90°</option>
+        <option :value="180">旋转 180°</option>
+        <option :value="270">逆时针 90°</option>
+      </select>
+      <input
+        v-model="state.advanced.crop"
+        class="input"
+        type="text"
+        placeholder="裁剪 W:H:X:Y（留空不裁剪）"
+        :disabled="copyMode"
+      />
+      <span v-if="cropInvalid" class="error-text">格式应为 W:H:X:Y</span>
+    </div>
 
     <span v-if="audioCopy" class="field__hint muted">直接复制源音轨，不重新编码</span>
 

@@ -14,7 +14,12 @@ export const DEFAULT_ADVANCED: AdvancedOptions = {
   videoCopy: false,
   imageMode: 'single',
   imageTimeSec: 1,
-  imageIntervalSec: 1
+  imageIntervalSec: 1,
+  trimStartSec: null,
+  trimEndSec: null,
+  crop: '',
+  rotate: 0,
+  normalizeAudio: false
 }
 
 export const DEFAULT_SETTINGS: Settings = {

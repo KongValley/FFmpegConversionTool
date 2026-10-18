@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
-import { buildFfmpegArgs, splitExtraArgs } from '../src/shared/args'
+import { buildFfmpegArgs, buildMergeArgs, splitExtraArgs } from '../src/shared/args'
 import { audioCopyExt } from '../src/shared/presets'
 import type { EncodeOptions, NvencSupport } from '../src/shared/types'
 
@@ -25,7 +25,12 @@ const base: EncodeOptions = {
   videoCopy: false,
   imageMode: 'single',
   imageTimeSec: 1,
-  imageIntervalSec: 1
+  imageIntervalSec: 1,
+  trimStartSec: null,
+  trimEndSec: null,
+  crop: '',
+  rotate: 0,
+  normalizeAudio: false
 }
 
 test('mp4-h264 CPU 高质量 1080p 生成完整参数', () => {
@@ -258,4 +263,138 @@ test('播放列表输入放开协议白名单', () => {
 
   const plain = buildFfmpegArgs('in.mp4', 'out.mp4', base, NO_NVENC)
   assert.ok(!plain.args.includes('-protocol_whitelist'))
+})
+
+test('时间裁剪：-ss 在 -i 前，-t 换算为相对时长', () => {
+  const both = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, trimStartSec: 5, trimEndSec: 15 }, NO_NVENC)
+  const ss = both.args.indexOf('-ss')
+  const i = both.args.indexOf('-i')
+  assert.ok(ss > -1 && ss < i)
+  assert.equal(both.args[ss + 1], '5')
+  const t = both.args.indexOf('-t')
+  assert.ok(t > i)
+  assert.equal(both.args[t + 1], '10')
+
+  const endOnly = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, trimEndSec: 8 }, NO_NVENC)
+  assert.ok(!endOnly.args.includes('-ss'))
+  assert.equal(endOnly.args[endOnly.args.indexOf('-t') + 1], '8')
+
+  const startOnly = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, trimStartSec: 2 }, NO_NVENC)
+  assert.ok(!startOnly.args.includes('-t'))
+
+  // 终点早于起点：不加 -t，避免负值
+  const reversed = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, trimStartSec: 5, trimEndSec: 3 }, NO_NVENC)
+  assert.ok(!reversed.args.includes('-t'))
+
+  // 图片预设忽略时间裁剪（单帧有自己的 -ss）
+  const image = buildFfmpegArgs(
+    'in.mp4',
+    join('frames', '%04d.jpg'),
+    { ...base, presetId: 'jpg', imageMode: 'sequence', trimStartSec: 5, trimEndSec: 15 },
+    NO_NVENC
+  )
+  assert.ok(!image.args.includes('-ss'))
+  assert.ok(!image.args.includes('-t'))
+})
+
+test('画面滤镜链：裁剪 → 旋转 → 缩放', () => {
+  const rotate90 = buildFfmpegArgs(
+    'in.mp4',
+    'out.mp4',
+    { ...base, crop: '640:360:0:0', rotate: 90, resolution: '720p' },
+    NO_NVENC
+  )
+  assert.equal(rotate90.args[rotate90.args.indexOf('-vf') + 1], 'crop=640:360:0:0,transpose=1,scale=-2:720')
+
+  const rotate180 = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, rotate: 180 }, NO_NVENC)
+  assert.equal(rotate180.args[rotate180.args.indexOf('-vf') + 1], 'hflip,vflip')
+
+  const rotate270 = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, rotate: 270 }, NO_NVENC)
+  assert.equal(rotate270.args[rotate270.args.indexOf('-vf') + 1], 'transpose=2')
+
+  // 非法裁剪格式被忽略，合法旋转仍生效
+  const invalid = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, crop: 'abc', rotate: 90 }, NO_NVENC)
+  assert.equal(invalid.args[invalid.args.indexOf('-vf') + 1], 'transpose=1')
+
+  const none = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, crop: 'abc' }, NO_NVENC)
+  assert.ok(!none.args.includes('-vf'))
+})
+
+test('GIF 与图片序列也走画面滤镜链', () => {
+  const gif = buildFfmpegArgs('in.mp4', 'out.gif', { ...base, presetId: 'gif', crop: '640:360:0:0', rotate: 90 }, NO_NVENC)
+  assert.equal(
+    gif.args[gif.args.indexOf('-filter_complex') + 1],
+    '[0:v] crop=640:360:0:0,transpose=1,fps=15,scale=480:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse'
+  )
+
+  const sequence = buildFfmpegArgs(
+    'in.mp4',
+    join('frames', '%04d.jpg'),
+    { ...base, presetId: 'jpg', imageMode: 'sequence', imageIntervalSec: 2, resolution: '720p', rotate: 270 },
+    NO_NVENC
+  )
+  assert.equal(sequence.args[sequence.args.indexOf('-vf') + 1], 'transpose=2,fps=1/2,scale=-2:720')
+})
+
+test('复制模式忽略画面滤镜但保留时间裁剪', () => {
+  const { args } = buildFfmpegArgs(
+    'in.mkv',
+    'out.mp4',
+    { ...base, videoCopy: true, crop: '640:360:0:0', rotate: 90, resolution: '720p', trimStartSec: 1, trimEndSec: 2 },
+    ALL_NVENC
+  )
+  assert.ok(!args.includes('-vf'))
+  assert.equal(args[args.indexOf('-ss') + 1], '1')
+  assert.equal(args[args.indexOf('-t') + 1], '1')
+})
+
+test('音量归一化只针对会编码音频的任务', () => {
+  const loudnorm = 'loudnorm=I=-16:TP=-1.5:LRA=11'
+  const video = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, normalizeAudio: true }, NO_NVENC)
+  assert.equal(video.args[video.args.indexOf('-af') + 1], loudnorm)
+
+  const audio = buildFfmpegArgs('in.mp4', 'out.mp3', { ...base, presetId: 'mp3', normalizeAudio: true }, NO_NVENC)
+  assert.equal(audio.args[audio.args.indexOf('-af') + 1], loudnorm)
+
+  const gif = buildFfmpegArgs('in.mp4', 'out.gif', { ...base, presetId: 'gif', normalizeAudio: true }, NO_NVENC)
+  assert.ok(!gif.args.includes('-af'))
+
+  const audioCopy = buildFfmpegArgs('in.mp4', 'out.m4a', { ...base, presetId: 'audio-copy', normalizeAudio: true }, NO_NVENC)
+  assert.ok(!audioCopy.args.includes('-af'))
+
+  const image = buildFfmpegArgs('in.mp4', 'out.png', { ...base, presetId: 'png', normalizeAudio: true }, NO_NVENC)
+  assert.ok(!image.args.includes('-af'))
+
+  // 复制视频流时音频仍编码，归一化照常生效
+  const videoCopy = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, videoCopy: true, normalizeAudio: true }, NO_NVENC)
+  assert.ok(videoCopy.args.includes('-af'))
+})
+
+test('合并参数：concat demuxer + 复制流 + 容器参数', () => {
+  const args = buildMergeArgs('C:/tmp/list.txt', 'out.mp4', { ...base, extraArgs: '-metadata title=merged' })
+  assert.deepEqual(args.slice(0, 14), [
+    '-hide_banner',
+    '-nostdin',
+    '-loglevel',
+    'warning',
+    '-progress',
+    'pipe:1',
+    '-nostats',
+    '-y',
+    '-f',
+    'concat',
+    '-safe',
+    '0',
+    '-i',
+    'C:/tmp/list.txt'
+  ])
+  assert.ok(args.join(' ').includes('-i C:/tmp/list.txt -map 0 -c copy'))
+  assert.ok(args.join(' ').includes('-movflags +faststart'))
+  assert.deepEqual(args.slice(-3), ['-metadata', 'title=merged', 'out.mp4'])
+
+  const h265 = buildMergeArgs('list.txt', 'out.mp4', { ...base, presetId: 'mp4-h265' })
+  assert.ok(h265.join(' ').includes('-tag:v hvc1'))
+
+  const mkv = buildMergeArgs('list.txt', 'out.mkv', { ...base, presetId: 'mkv-h264' })
+  assert.ok(!mkv.includes('-movflags'))
 })

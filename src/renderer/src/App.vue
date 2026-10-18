@@ -3,7 +3,18 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import FfmpegBanner from './components/FfmpegBanner.vue'
 import QueueList from './components/QueueList.vue'
 import ConvertSettings from './components/ConvertSettings.vue'
-import { addFiles, cancelAll, clearFinished, init, startQueue, state } from '@renderer/stores/queue'
+import { PRESETS } from '@shared/presets'
+import {
+  addFiles,
+  cancelAll,
+  clearFinished,
+  clearSelection,
+  init,
+  mergeSelected,
+  selectedCount,
+  startQueue,
+  state
+} from '@renderer/stores/queue'
 
 const errorText = ref('')
 const noticeText = ref('')
@@ -15,7 +26,9 @@ let noticeTimer: number | undefined
 let dragDepth = 0
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  const text = error instanceof Error ? error.message : String(error)
+  // ipcRenderer.invoke 会给主进程抛出的错误加前缀，界面只显示原始原因
+  return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
 }
 
 function showError(error: unknown): void {
@@ -37,6 +50,7 @@ function showNotice(text: string): void {
 const pendingCount = computed(() => state.jobs.filter((job) => job.status === 'queued').length)
 const busy = computed(() => state.jobs.some((job) => job.status === 'running'))
 const ffmpegReady = computed(() => state.ffmpeg.status === 'ready')
+const videoPreset = computed(() => PRESETS[state.settings.presetId].kind === 'video')
 
 /** 按钮与拖放共用的添加流程 */
 async function ingest(paths: string[]): Promise<void> {
@@ -62,8 +76,19 @@ async function pickFiles(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  clearSelection()
   try {
     await startQueue()
+  } catch (error) {
+    showError(error)
+  }
+}
+
+async function merge(): Promise<void> {
+  const count = selectedCount.value
+  try {
+    await mergeSelected()
+    showNotice(`已合并 ${count} 个文件，开始转换`)
   } catch (error) {
     showError(error)
   }
@@ -150,6 +175,14 @@ onUnmounted(() => {
           >
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
             开始转换
+          </button>
+          <button
+            type="button"
+            class="btn"
+            :disabled="selectedCount < 2 || !ffmpegReady || busy || !videoPreset"
+            @click="merge"
+          >
+            合并所选 ({{ selectedCount }})
           </button>
           <button type="button" class="btn btn--ghost" :disabled="!busy" @click="cancelAll">取消全部</button>
           <button type="button" class="btn btn--ghost" @click="clearFinished">清空已完成</button>

@@ -1,4 +1,4 @@
-import { reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { DEFAULT_ADVANCED, DEFAULT_SETTINGS } from '@shared/settings'
 import type { EncodeOptions, FfmpegState, Job, Settings } from '@shared/types'
 
@@ -39,7 +39,12 @@ export function currentOptions(): EncodeOptions {
     videoCopy: state.advanced.videoCopy,
     imageMode: state.advanced.imageMode,
     imageTimeSec: state.advanced.imageTimeSec,
-    imageIntervalSec: state.advanced.imageIntervalSec
+    imageIntervalSec: state.advanced.imageIntervalSec,
+    trimStartSec: state.advanced.trimStartSec,
+    trimEndSec: state.advanced.trimEndSec,
+    crop: state.advanced.crop,
+    rotate: state.advanced.rotate,
+    normalizeAudio: state.advanced.normalizeAudio
   }
 }
 
@@ -85,12 +90,41 @@ export async function startQueue(): Promise<void> {
   await window.api.jobs.start()
 }
 
+/** 勾选等待中的任务准备合并（Vue 3 对 Set 的变更可响应） */
+export const selectedIds = reactive(new Set<string>())
+export const selectedCount = computed(() => selectedIds.size)
+
+export function toggleSelection(id: string): void {
+  if (selectedIds.has(id)) selectedIds.delete(id)
+  else selectedIds.add(id)
+}
+
+export function clearSelection(): void {
+  selectedIds.clear()
+}
+
+/** 合并所选任务：主进程移除原任务并新建合并任务，界面同步移除后再插入合并任务 */
+export async function mergeSelected(): Promise<number> {
+  const ids = [...selectedIds]
+  const merged = await window.api.jobs.merge(ids, currentOptions())
+  const picked = new Set(ids)
+  state.jobs = state.jobs.filter((entry) => !picked.has(entry.id))
+  upsert(merged)
+  clearSelection()
+  return ids.length
+}
+
 export async function cancelJob(id: string): Promise<void> {
   await window.api.jobs.cancel(id)
 }
 
 export async function removeJob(id: string): Promise<void> {
+  const job = state.jobs.find((entry) => entry.id === id)
   await window.api.jobs.remove(id)
+  // 运行中的任务是先取消再保留，其余由主进程直接移出队列
+  if (job?.status === 'running') return
+  state.jobs = state.jobs.filter((entry) => entry.id !== id)
+  selectedIds.delete(id)
 }
 
 export async function retryJob(id: string): Promise<void> {

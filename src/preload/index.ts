@@ -20,6 +20,7 @@ const api: MediaConverterApi = {
   jobs: {
     enqueue: (paths: string[], options: EncodeOptions) =>
       ipcRenderer.invoke(IPC.jobsEnqueue, paths, options) as Promise<{ jobs: Job[]; skipped: number }>,
+    merge: (ids: string[], options: EncodeOptions) => ipcRenderer.invoke(IPC.jobsMerge, ids, options) as Promise<Job>,
     start: () => ipcRenderer.invoke(IPC.jobsStart) as Promise<void>,
     cancel: (id: string) => ipcRenderer.invoke(IPC.jobsCancel, id) as Promise<void>,
     remove: (id: string) => ipcRenderer.invoke(IPC.jobsRemove, id) as Promise<void>,

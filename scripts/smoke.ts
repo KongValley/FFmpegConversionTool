@@ -1,6 +1,7 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildFfmpegArgs } from '../src/shared/args'
+import { buildFfmpegArgs, buildMergeArgs } from '../src/shared/args'
+import { concatListContent } from '../src/shared/concat'
 import { downloadAndExtract } from '../src/main/ffmpeg/download'
 import { runCommand } from '../src/main/ffmpeg/exec'
 import type { EncodeOptions, NvencSupport } from '../src/shared/types'
@@ -29,7 +30,12 @@ const base: EncodeOptions = {
   videoCopy: false,
   imageMode: 'single',
   imageTimeSec: 1,
-  imageIntervalSec: 1
+  imageIntervalSec: 1,
+  trimStartSec: null,
+  trimEndSec: null,
+  crop: '',
+  rotate: 0,
+  normalizeAudio: false
 }
 
 async function ensureFfmpeg(): Promise<void> {
@@ -120,6 +126,15 @@ async function audioCodecOf(file: string): Promise<string> {
     20_000
   )
   return result.stdout.trim()
+}
+
+async function durationOf(file: string): Promise<number> {
+  const result = await runCommand(
+    ffprobePath,
+    ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file],
+    20_000
+  )
+  return Number(result.stdout.trim())
 }
 
 async function convert(
@@ -230,6 +245,51 @@ async function runImageSequence(nvenc: NvencSupport): Promise<void> {
   console.log(`PASS image-sequence（${frames.length} 帧）-> ${dir}`)
 }
 
+/** 合并：两段同参数片段经 concat 列表 + 复制流拼接 */
+async function runMergeConcat(): Promise<void> {
+  const clips = [
+    { file: join(baseDir, 'merge-a.mp4'), freq: 440 },
+    { file: join(baseDir, 'merge-b.mp4'), freq: 660 }
+  ]
+  for (const { file, freq } of clips) {
+    rmSync(file, { force: true })
+    const result = await runCommand(
+      ffmpegPath,
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc2=duration=1.5:size=320x180:rate=24',
+        '-f',
+        'lavfi',
+        '-i',
+        `sine=frequency=${freq}:duration=1.5`,
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-c:a',
+        'aac',
+        file
+      ],
+      120_000
+    )
+    if (result.code !== 0) throw new Error(`生成合并片段失败：\n${result.stderr.slice(-800)}`)
+  }
+  const listPath = join(baseDir, 'merge-list.txt')
+  writeFileSync(listPath, concatListContent(clips.map((clip) => clip.file)), 'utf8')
+  const output = join(baseDir, 'merge-concat.mp4')
+  rmSync(output, { force: true })
+  const result = await runCommand(ffmpegPath, buildMergeArgs(listPath, output, base), 300_000)
+  if (result.code !== 0) throw new Error(`merge-concat 失败：\n${result.stderr.slice(-800)}`)
+  if ((await videoCodecOf(output)) !== 'h264') throw new Error('合并输出视频不是 h264')
+  if ((await audioCodecOf(output)) !== 'aac') throw new Error('合并输出音频不是 aac')
+  const duration = await durationOf(output)
+  if (!(duration >= 2.7 && duration <= 3.3)) throw new Error(`合并输出时长异常：${duration}`)
+  console.log(`PASS merge-concat（${duration.toFixed(2)}s）-> ${output}`)
+}
+
 async function main(): Promise<void> {
   mkdirSync(baseDir, { recursive: true })
   await ensureFfmpeg()
@@ -281,6 +341,14 @@ async function main(): Promise<void> {
   if (pngHeader.toString('latin1') !== '\x89PNG\r\n\x1a\n') throw new Error('单帧截图文件头不是 PNG')
 
   await runImageSequence(nvenc)
+
+  const trimOut = await convert('trim', { ...base, trimStartSec: 1, trimEndSec: 2 }, 'mp4', nvenc)
+  if ((await videoCodecOf(trimOut)) !== 'h264') throw new Error('trim 用例输出编码不是 h264')
+  const trimDuration = await durationOf(trimOut)
+  if (!(trimDuration >= 0.8 && trimDuration <= 1.2)) throw new Error(`trim 输出时长异常：${trimDuration}`)
+  console.log(`PASS trim（${trimDuration.toFixed(2)}s）-> ${trimOut}`)
+
+  await runMergeConcat()
 
   console.log('冒烟测试全部通过')
 }

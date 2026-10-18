@@ -8,6 +8,7 @@ import { ensureInstalled, getVersion, isInstalled, probeCapabilities } from './f
 import {
   cancelJob,
   enqueueJobs,
+  enqueueMerge,
   getQueueProgress,
   removeJob,
   retryJob,
@@ -89,6 +90,7 @@ function registerIpc(): void {
     void runInstall()
   })
   ipcMain.handle(IPC.jobsEnqueue, (_event, paths: string[], options: EncodeOptions) => enqueueJobs(paths, options))
+  ipcMain.handle(IPC.jobsMerge, (_event, ids: string[], options: EncodeOptions) => enqueueMerge(ids, options))
   ipcMain.handle(IPC.jobsStart, () => {
     void startQueue()
   })

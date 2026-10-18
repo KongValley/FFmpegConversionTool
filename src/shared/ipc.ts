@@ -3,6 +3,7 @@ export const IPC = {
   ffmpegInstall: 'ffmpeg:install',
   ffmpegState: 'ffmpeg:state',
   jobsEnqueue: 'jobs:enqueue',
+  jobsMerge: 'jobs:merge',
   jobsStart: 'jobs:start',
   jobsCancel: 'jobs:cancel',
   jobsRemove: 'jobs:remove',

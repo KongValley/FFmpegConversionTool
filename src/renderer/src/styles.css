@@ -479,6 +479,13 @@ body {
   min-width: 0;
 }
 
+.job__select {
+  width: 15px;
+  height: 15px;
+  margin-left: auto;
+  accent-color: var(--accent);
+}
+
 .job__name {
   font-size: 13.5px;
   font-weight: 600;

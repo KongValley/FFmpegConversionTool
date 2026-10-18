@@ -143,6 +143,16 @@ function containerArgs(preset: PresetDef, output: string): string[] {
   return args
 }
 
+/** 画面滤镜链：裁剪 → 旋转（调用方按需再接缩放/帧率） */
+export function buildVideoFilters(o: EncodeOptions): string[] {
+  const filters: string[] = []
+  if (/^\d+:\d+:\d+:\d+$/.test(o.crop)) filters.push(`crop=${o.crop}`)
+  if (o.rotate === 90) filters.push('transpose=1')
+  else if (o.rotate === 180) filters.push('hflip,vflip')
+  else if (o.rotate === 270) filters.push('transpose=2')
+  return filters
+}
+
 export function buildFfmpegArgs(
   input: string,
   output: string,
@@ -157,23 +167,32 @@ export function buildFfmpegArgs(
   if (preset.kind === 'image' && o.imageMode === 'single') {
     args.push('-ss', String(Math.max(0, o.imageTimeSec)))
   }
+  // 时间裁剪的起点也是输入级选项；图片预设不用（单帧已有自己的 -ss）
+  const trimStart = preset.kind !== 'image' && o.trimStartSec !== null && o.trimStartSec >= 0 ? o.trimStartSec : null
+  if (trimStart !== null) args.push('-ss', String(trimStart))
   // -hwaccel 是输入选项，必须排在 -i 之前；音频/GIF/图片与复制模式都用不到
   if (o.hwaccel && preset.kind === 'video' && !o.videoCopy) args.push('-hwaccel', 'cuda')
   args.push('-i', input)
+  // 终点换算成相对起点（或文件开头）的时长；非正值时不加，避免 ffmpeg 报错
+  if (preset.kind !== 'image' && o.trimEndSec !== null) {
+    const duration = Math.max(0, o.trimEndSec - (trimStart ?? 0))
+    if (duration > 0) args.push('-t', String(duration))
+  }
   let usedGpu = false
 
   if (preset.kind === 'gif') {
     const width = customSize(o.resolution)?.[0] ?? GIF_WIDTHS[o.resolution]
+    const filters = [...buildVideoFilters(o), 'fps=15', `scale=${width}:-2:flags=lanczos`]
     args.push('-an', '-sn', '-dn')
     args.push(
       '-filter_complex',
-      `[0:v] fps=15,scale=${width}:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse`,
+      `[0:v] ${filters.join(',')},split[a][b];[a]palettegen[p];[b][p]paletteuse`,
       '-loop',
       '0'
     )
   } else if (preset.kind === 'image') {
     args.push('-map', '0:v:0?', '-an', '-sn', '-dn')
-    const filters: string[] = []
+    const filters = buildVideoFilters(o)
     if (o.imageMode === 'sequence') filters.push(`fps=1/${Math.max(1, Math.round(o.imageIntervalSec))}`)
     const scale = scaleExpression(o.resolution)
     if (scale) filters.push(scale)
@@ -186,19 +205,51 @@ export function buildFfmpegArgs(
     } else {
       args.push('-map', '0:v:0?', '-map', '0:a:0?', '-sn', '-dn')
       if (o.videoCopy) {
+        // 复制流无法应用滤镜：裁剪/旋转/缩放/帧率整体忽略，时间裁剪仍由 -ss/-t 生效
         args.push('-c:v', 'copy')
       } else {
         const encoder = resolveVideoEncoder(preset, o, nvenc)
         usedGpu = encoder.gpu
         args.push(...videoArgs(encoder.name, o), '-pix_fmt', 'yuv420p')
+        const filters = buildVideoFilters(o)
         const scale = scaleExpression(o.resolution)
-        if (scale) args.push('-vf', scale)
+        if (scale) filters.push(scale)
+        if (filters.length > 0) args.push('-vf', filters.join(','))
         if (o.fps !== null && Number.isFinite(o.fps) && o.fps > 0) args.push('-r', String(o.fps))
       }
     }
     args.push(...audioArgs(preset, o))
+    if (o.normalizeAudio && !preset.audioCopy) args.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11')
   }
 
   args.push(...containerArgs(preset, output), ...splitExtraArgs(o.extraArgs), output)
   return { args, usedGpu }
+}
+
+/** 无损合并：concat demuxer + 复制流，容器参数按输出扩展名决定 */
+export function buildMergeArgs(concatListPath: string, output: string, o: EncodeOptions): string[] {
+  const preset = PRESETS[o.presetId]
+  return [
+    '-hide_banner',
+    '-nostdin',
+    '-loglevel',
+    'warning',
+    '-progress',
+    'pipe:1',
+    '-nostats',
+    '-y',
+    '-f',
+    'concat',
+    '-safe',
+    '0',
+    '-i',
+    concatListPath,
+    '-map',
+    '0',
+    '-c',
+    'copy',
+    ...containerArgs(preset, output),
+    ...splitExtraArgs(o.extraArgs),
+    output
+  ]
 }

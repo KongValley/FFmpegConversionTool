@@ -1,9 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { buildFfmpegArgs } from '../shared/args'
+import { app } from 'electron'
+import { buildFfmpegArgs, buildMergeArgs } from '../shared/args'
+import { concatCompatibilityError, concatListContent } from '../shared/concat'
+import { effectiveDurationMs } from '../shared/trim'
 import { parseProgressLine, progressFrom } from '../shared/progress'
 import { PRESETS, audioCopyExt } from '../shared/presets'
 import type { EncodeOptions, Job, MediaInfo } from '../shared/types'
@@ -129,6 +132,72 @@ export function resolveOutputPath(inputPath: string, options: EncodeOptions, med
   return uniqueOutputPath(inputPath, preset.ext, outputDir)
 }
 
+/** 合并输出：<原名>_merged.<ext>，与已有文件、已入队任务都不重名 */
+export function uniqueMergedPath(
+  inputPath: string,
+  ext: string,
+  outputDir: string | null,
+  excludeId?: string
+): string {
+  const dir = outputDir ?? dirname(inputPath)
+  mkdirSync(dir, { recursive: true })
+  const base = basename(inputPath, extname(inputPath))
+  const taken = new Set(jobs.filter((job) => job.id !== excludeId).map((job) => job.outputPath.toLowerCase()))
+  let candidate = join(dir, `${base}_merged.${ext}`)
+  let index = 2
+  while (existsSync(candidate) || taken.has(candidate.toLowerCase())) {
+    candidate = join(dir, `${base}_merged_${index}.${ext}`)
+    index += 1
+  }
+  return candidate
+}
+
+/** 合并所选“等待中”任务为一次无损拼接；被合并任务从未转换，直接移出队列 */
+export async function enqueueMerge(ids: string[], options: EncodeOptions): Promise<Job> {
+  if (!isInstalled()) throw new Error('FFmpeg 尚未安装')
+  const preset = PRESETS[options.presetId]
+  if (preset.kind !== 'video') throw new Error('合并仅支持视频预设')
+  const selected: Job[] = []
+  for (const id of ids) {
+    const job = jobs.find((entry) => entry.id === id)
+    if (!job || job.status !== 'queued') throw new Error('只能合并等待中的任务')
+    selected.push(job)
+  }
+  if (selected.length < 2) throw new Error('至少选择 2 个文件')
+  const compatibility = concatCompatibilityError(selected.map((job) => job.media))
+  if (compatibility) throw new Error(compatibility)
+
+  const first = selected[0]
+  const durations = selected.map((job) => job.media?.durationMs ?? null)
+  const outputDir = getSettings().outputMode === 'custom' ? getSettings().outputDir : null
+  for (const job of selected) jobs.splice(jobs.indexOf(job), 1)
+  const merged: Job = {
+    id: randomUUID(),
+    inputPath: first.inputPath,
+    outputPath: uniqueMergedPath(first.inputPath, preset.ext, outputDir),
+    // 合并是复制流：剪辑/滤镜字段不适用，清掉避免影响进度估算
+    options: { ...options, trimStartSec: null, trimEndSec: null },
+    media: {
+      durationMs: durations.every((ms) => ms !== null) ? durations.reduce((sum, ms) => sum + (ms ?? 0), 0) : null,
+      format: 'concat',
+      hasVideo: true,
+      hasAudio: first.media?.hasAudio ?? false,
+      video: first.media?.video,
+      audio: first.media?.audio
+    },
+    status: 'queued',
+    progress: emptyProgress(),
+    usedGpu: false,
+    fallbackNote: null,
+    error: null,
+    mergeInputs: selected.map((job) => job.inputPath)
+  }
+  jobs.push(merged)
+  emitJob(merged)
+  void startQueue()
+  return { ...merged, options: { ...merged.options }, progress: { ...merged.progress } }
+}
+
 export async function enqueueJobs(
   paths: string[],
   options: EncodeOptions
@@ -156,7 +225,8 @@ export async function enqueueJobs(
       progress: emptyProgress(),
       usedGpu: false,
       fallbackNote: null,
-      error
+      error,
+      mergeInputs: null
     }
     jobs.push(job)
     created.push({ ...job })
@@ -179,11 +249,13 @@ export async function retryJob(id: string): Promise<Job | null> {
   }
   const preset = PRESETS[job.options.presetId]
   const outputDir = getSettings().outputMode === 'custom' ? getSettings().outputDir : null
-  job.outputPath = preset.audioCopy
-    ? uniqueOutputPath(job.inputPath, audioCopyExt(job.media?.audio?.codec), outputDir, job.id)
-    : preset.kind === 'image' && job.options.imageMode === 'sequence'
-      ? uniqueOutputDir(job.inputPath, outputDir)
-      : uniqueOutputPath(job.inputPath, preset.ext, outputDir, job.id)
+  job.outputPath = job.mergeInputs
+    ? uniqueMergedPath(job.mergeInputs[0], preset.ext, outputDir, job.id)
+    : preset.audioCopy
+      ? uniqueOutputPath(job.inputPath, audioCopyExt(job.media?.audio?.codec), outputDir, job.id)
+      : preset.kind === 'image' && job.options.imageMode === 'sequence'
+        ? uniqueOutputDir(job.inputPath, outputDir)
+        : uniqueOutputPath(job.inputPath, preset.ext, outputDir, job.id)
   job.status = 'queued'
   job.error = null
   job.fallbackNote = null
@@ -194,7 +266,19 @@ export async function retryJob(id: string): Promise<Job | null> {
   return { ...job, options: { ...job.options }, progress: { ...job.progress } }
 }
 
-async function spawnAttempt(job: Job, options: EncodeOptions): Promise<{ code: number; stderr: string }> {
+/** 合并列表写入系统临时目录；任务结束（含取消）后删除 */
+function writeConcatList(jobId: string, inputs: string[]): string {
+  const dir = join(app.getPath('temp'), 'media-converter')
+  mkdirSync(dir, { recursive: true })
+  const listPath = join(dir, `${jobId}.txt`)
+  writeFileSync(listPath, concatListContent(inputs), 'utf8')
+  return listPath
+}
+
+async function spawnAttempt(
+  job: Job,
+  options: EncodeOptions
+): Promise<{ code: number; stderr: string; outTimeUs: number }> {
   const { ffmpegPath } = getPaths()
   const nvenc = await probeCapabilities()
   const preset = PRESETS[options.presetId]
@@ -203,7 +287,11 @@ async function spawnAttempt(job: Job, options: EncodeOptions): Promise<{ code: n
     preset.kind === 'image' && options.imageMode === 'sequence'
       ? join(job.outputPath, `%04d.${preset.ext}`)
       : job.outputPath
-  const { args, usedGpu } = buildFfmpegArgs(job.inputPath, outputArg, options, nvenc)
+  // 合并任务走 concat demuxer + 复制流，不使用 GPU
+  const listPath = job.mergeInputs ? writeConcatList(job.id, job.mergeInputs) : null
+  const { args, usedGpu } = listPath
+    ? { args: buildMergeArgs(listPath, outputArg, options), usedGpu: false }
+    : buildFfmpegArgs(job.inputPath, outputArg, options, nvenc)
   // 纯音频输入即便预设支持 NVENC 也不会用到 GPU，徽章不能误报
   job.usedGpu = usedGpu && (job.media?.hasVideo ?? true)
   const child = spawn(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -219,7 +307,7 @@ async function spawnAttempt(job: Job, options: EncodeOptions): Promise<{ code: n
     }
   })
 
-  const durationMs = job.media?.durationMs ?? null
+  const durationMs = effectiveDurationMs(job.media?.durationMs ?? null, options)
   let outTimeUs = 0
   let speed: string | null = null
   let fps: number | null = null
@@ -274,10 +362,11 @@ async function spawnAttempt(job: Job, options: EncodeOptions): Promise<{ code: n
   })
 
   const [code] = (await once(child, 'close')) as [number | null]
+  if (listPath) rmSync(listPath, { force: true })
   const canceled = activeJob?.canceled ?? false
   activeJob = null
-  if (canceled) return { code: -2, stderr: stderrLines.join('\n') }
-  return { code: code ?? -1, stderr: stderrLines.join('\n') }
+  if (canceled) return { code: -2, stderr: stderrLines.join('\n'), outTimeUs }
+  return { code: code ?? -1, stderr: stderrLines.join('\n'), outTimeUs }
 }
 
 /** 图片序列的产物是一个目录，其余是单个文件 */
@@ -301,8 +390,8 @@ async function runJob(job: Job): Promise<void> {
   let options = job.options
   let attempt = await spawnAttempt(job, options)
 
-  // 回退 1：复制视频流失败（容器或编码不兼容）→ 重新编码
-  if (attempt.code !== 0 && attempt.code !== -2 && options.videoCopy) {
+  // 回退 1：复制视频流失败（容器或编码不兼容）→ 重新编码；合并本身即复制，重试无意义
+  if (attempt.code !== 0 && attempt.code !== -2 && options.videoCopy && !job.mergeInputs) {
     cleanupPartial(job, options)
     options = { ...options, videoCopy: false }
     notes.push('复制视频流失败（容器或编码不兼容），已自动重新编码')
@@ -336,6 +425,15 @@ async function runJob(job: Job): Promise<void> {
           options.imageMode === 'sequence'
             ? '没有可导出的画面'
             : '该时间点没有可导出的画面（时间点可能超出视频时长）'
+        cleanupPartial(job, options)
+        settle(job, 'error')
+        return
+      }
+    } else {
+      // 越界的 -ss/-t 同样以退出码 0 结束：progress 报 out_time=N/A、产物为空壳，必须核实
+      const size = statSync(job.outputPath, { throwIfNoEntry: false })?.size ?? 0
+      if (attempt.outTimeUs === 0 || size === 0) {
+        job.error = '未生成输出内容（时间裁剪可能超出源时长）'
         cleanupPartial(job, options)
         settle(job, 'error')
         return

@@ -41,6 +41,11 @@ export interface EncodeOptions {
   imageMode: 'single' | 'sequence'
   imageTimeSec: number
   imageIntervalSec: number
+  trimStartSec: number | null
+  trimEndSec: number | null
+  crop: string
+  rotate: 0 | 90 | 180 | 270
+  normalizeAudio: boolean
 }
 
 export interface MediaInfo {
@@ -74,6 +79,8 @@ export interface Job {
   usedGpu: boolean
   fallbackNote: string | null
   error: string | null
+  /** 无损合并任务的输入文件列表，普通任务为 null */
+  mergeInputs: string[] | null
 }
 
 export interface AdvancedOptions {
@@ -91,6 +98,11 @@ export interface AdvancedOptions {
   imageMode: 'single' | 'sequence'
   imageTimeSec: number
   imageIntervalSec: number
+  trimStartSec: number | null
+  trimEndSec: number | null
+  crop: string
+  rotate: 0 | 90 | 180 | 270
+  normalizeAudio: boolean
 }
 
 export interface WindowState {

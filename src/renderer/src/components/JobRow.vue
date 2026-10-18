@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Job } from '@shared/types'
-import { cancelJob, removeJob, retryJob } from '@renderer/stores/queue'
+import { cancelJob, removeJob, retryJob, selectedIds, toggleSelection } from '@renderer/stores/queue'
 
 const props = defineProps<{ job: Job }>()
 
@@ -24,20 +24,22 @@ const pillClass = computed(() =>
 )
 
 const mediaSummary = computed(() => {
-  const media = props.job.media
-  if (!media) return ''
   const parts: string[] = []
-  if (media.durationMs !== null) {
-    const total = Math.round(media.durationMs / 1000)
-    const mm = String(Math.floor(total / 60)).padStart(2, '0')
-    const ss = String(total % 60).padStart(2, '0')
-    parts.push(`${mm}:${ss}`)
+  if (props.job.mergeInputs) parts.push(`合并 ${props.job.mergeInputs.length} 个文件`)
+  const media = props.job.media
+  if (media) {
+    if (media.durationMs !== null) {
+      const total = Math.round(media.durationMs / 1000)
+      const mm = String(Math.floor(total / 60)).padStart(2, '0')
+      const ss = String(total % 60).padStart(2, '0')
+      parts.push(`${mm}:${ss}`)
+    }
+    if (media.video) {
+      parts.push(`${media.video.width}×${media.video.height}`)
+      parts.push(media.video.codec)
+    }
+    if (media.audio) parts.push(media.audio.codec)
   }
-  if (media.video) {
-    parts.push(`${media.video.width}×${media.video.height}`)
-    parts.push(media.video.codec)
-  }
-  if (media.audio) parts.push(media.audio.codec)
   return parts.join(' · ')
 })
 
@@ -68,6 +70,14 @@ function reveal(): void {
       <div class="job__head">
         <span class="job__name" :title="job.inputPath">{{ fileName }}</span>
         <span class="pill" :class="pillClass">{{ statusText }}</span>
+        <input
+          v-if="job.status === 'queued'"
+          class="job__select"
+          type="checkbox"
+          :checked="selectedIds.has(job.id)"
+          :aria-label="'选择 ' + fileName"
+          @change="toggleSelection(job.id)"
+        />
       </div>
       <div v-if="mediaSummary" class="job__meta">{{ mediaSummary }}</div>
 

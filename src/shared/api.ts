@@ -9,6 +9,7 @@ export interface MediaConverterApi {
   }
   jobs: {
     enqueue(paths: string[], options: EncodeOptions): Promise<{ jobs: Job[]; skipped: number }>
+    merge(ids: string[], options: EncodeOptions): Promise<Job>
     start(): Promise<void>
     cancel(id: string): Promise<void>
     remove(id: string): Promise<void>
