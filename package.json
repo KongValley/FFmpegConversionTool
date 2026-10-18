@@ -1,6 +1,6 @@
 {
   "name": "media-converter",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "音视频转换工具（Electron + FFmpeg，NVENC 硬件加速）",
   "author": "KongValley",
