@@ -11,6 +11,9 @@ const isImage = computed(() => preset.value.kind === 'image')
 const isVideo = computed(() => preset.value.kind === 'video')
 const audioCopy = computed(() => preset.value.audioCopy === true)
 const copyMode = computed(() => isVideo.value && state.advanced.videoCopy)
+const audioCopied = computed(
+  () => isVideo.value && preset.value.ext !== 'webm' && state.advanced.audioCodec === 'copy'
+)
 const showAudio = computed(() => (isVideo.value || isAudio.value) && !audioCopy.value)
 const showAudioCodec = computed(() => isVideo.value && preset.value.ext !== 'webm')
 const showAudioBitrate = computed(() => {
@@ -182,7 +185,7 @@ const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:
         <input v-model="trimEndInput" class="input input--number" type="number" min="0" step="0.1" placeholder="到结尾" />
         <span class="muted">秒</span>
       </div>
-      <label v-if="showAudio" class="radio">
+      <label v-if="showAudio && !audioCopied" class="radio">
         <input v-model="state.advanced.normalizeAudio" type="checkbox" />
         <span>音量归一化（-16 LUFS 单遍 loudnorm）</span>
       </label>
@@ -217,7 +220,9 @@ const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:
           <option value="aac">AAC</option>
           <option value="libmp3lame">MP3</option>
           <option value="libopus">Opus</option>
+          <option value="copy">复制（不重编码）</option>
         </select>
+        <span v-if="audioCopied" class="field__hint muted">直接复制源音轨，容器或编码不兼容时自动重新编码</span>
       </label>
 
       <label v-if="showAudioBitrate" class="field">
@@ -234,7 +239,7 @@ const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:
         </div>
       </label>
 
-      <label class="field">
+      <label v-if="!audioCopied" class="field">
         <span class="field__label">声道</span>
         <select v-model="state.advanced.channels" class="input">
           <option value="source">保持源</option>
@@ -243,7 +248,7 @@ const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:
         </select>
       </label>
 
-      <label class="field">
+      <label v-if="!audioCopied" class="field">
         <span class="field__label">采样率</span>
         <select v-model="state.advanced.sampleRate" class="input">
           <option :value="null">保持源</option>

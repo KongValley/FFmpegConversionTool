@@ -31,7 +31,7 @@ export interface EncodeOptions {
   videoBitrateKbps: number
   resolution: Resolution
   fps: number | null
-  audioCodec: 'auto' | 'aac' | 'libmp3lame' | 'libopus'
+  audioCodec: 'auto' | 'aac' | 'libmp3lame' | 'libopus' | 'copy'
   audioBitrateKbps: number
   channels: 'source' | '2' | '1'
   sampleRate: number | null
@@ -88,7 +88,7 @@ export interface AdvancedOptions {
   videoBitrateKbps: number
   resolution: Resolution
   fps: number | null
-  audioCodec: 'auto' | 'aac' | 'libmp3lame' | 'libopus'
+  audioCodec: 'auto' | 'aac' | 'libmp3lame' | 'libopus' | 'copy'
   audioBitrateKbps: number
   channels: 'source' | '2' | '1'
   sampleRate: number | null
@@ -120,6 +120,8 @@ export interface Settings {
   quality: Quality
   advanced: AdvancedOptions
   window: WindowState | null
+  /** 并行转换任务数，1 = 串行；读取时钳制在 1–4 */
+  parallel: number
 }
 
 export interface FfmpegState {

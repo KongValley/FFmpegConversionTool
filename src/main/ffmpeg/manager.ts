@@ -6,6 +6,7 @@ import { runCommand } from './exec'
 import type { NvencSupport } from '../../shared/types'
 
 let capabilityCache: NvencSupport | null = null
+let capabilityPending: Promise<NvencSupport> | null = null
 
 /** FFMPEG_DIR 环境变量优先，否则用 userData/bin/ffmpeg */
 export function getPaths(): FfmpegPaths {
@@ -39,12 +40,12 @@ export async function ensureInstalled(
   const check = await runCommand(result.ffmpegPath, ['-version'], 20_000)
   if (check.code !== 0) throw new Error(`FFmpeg 无法运行：\n${check.stderr.slice(-500)}`)
   capabilityCache = null
+  capabilityPending = null
   return result
 }
 
 /** 先看编译进的编码器，再用黑帧实机验证 NVENC 是否真的可用 */
-export async function probeCapabilities(): Promise<NvencSupport> {
-  if (capabilityCache) return capabilityCache
+async function probeCapabilitiesOnce(): Promise<NvencSupport> {
   const { ffmpegPath } = getPaths()
   const support: NvencSupport = { h264: false, hevc: false, av1: false }
   const encoders = await runCommand(ffmpegPath, ['-hide_banner', '-encoders'], 20_000)
@@ -67,6 +68,15 @@ export async function probeCapabilities(): Promise<NvencSupport> {
   }
   capabilityCache = support
   return support
+}
+
+/** 并行批次会在同一轮事件循环里同时请求探测，共享进行中的 promise，避免重复跑黑帧 NVENC 探测 */
+export function probeCapabilities(): Promise<NvencSupport> {
+  if (capabilityCache) return Promise.resolve(capabilityCache)
+  capabilityPending ??= probeCapabilitiesOnce().finally(() => {
+    capabilityPending = null
+  })
+  return capabilityPending
 }
 
 export async function getVersion(): Promise<string | null> {

@@ -126,6 +126,21 @@ function selectOutputMode(mode: 'source' | 'custom'): void {
         </div>
       </div>
 
+      <label class="field">
+        <span class="field__label">并行转换</span>
+        <select
+          class="input"
+          :value="state.settings.parallel"
+          @change="updateSettings({ parallel: Number(($event.target as HTMLSelectElement).value) })"
+        >
+          <option :value="1">1（串行）</option>
+          <option :value="2">2</option>
+          <option :value="3">3</option>
+          <option :value="4">4</option>
+        </select>
+        <span class="field__hint muted">并行数 &gt; 1 时同时转换多个文件；NVENC 并发会话受驱动限制，超出的任务会自动回退 CPU</span>
+      </label>
+
       <AdvancedPanel />
     </div>
   </div>

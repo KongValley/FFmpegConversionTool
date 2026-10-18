@@ -26,7 +26,7 @@ export interface DrainSummary {
 const jobs: Job[] = []
 let jobListener: (job: Job) => void = () => undefined
 let drainListener: (summary: DrainSummary) => void = () => undefined
-let activeJob: { id: string; child: ChildProcess | null; canceled: boolean } | null = null
+const active = new Map<string, { child: ChildProcess | null; canceled: boolean }>()
 let running = false
 let batchFinished = 0
 const drained = new Set<string>()
@@ -55,7 +55,7 @@ export function getQueueProgress(): { percent: number } | null {
   const runningJobs = jobs.filter((job) => job.status === 'running')
   if (runningJobs.length === 0) return null
   const queued = jobs.filter((job) => job.status === 'queued').length
-  const current = runningJobs[0].progress.percent ?? 0
+  const current = runningJobs.reduce((sum, job) => sum + (job.progress.percent ?? 0), 0) / runningJobs.length
   const total = batchFinished + queued + runningJobs.length
   if (total === 0) return null
   return { percent: Math.round(((batchFinished + current / 100) / total) * 100) }
@@ -295,7 +295,7 @@ async function spawnAttempt(
   // 纯音频输入即便预设支持 NVENC 也不会用到 GPU，徽章不能误报
   job.usedGpu = usedGpu && (job.media?.hasVideo ?? true)
   const child = spawn(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  activeJob = { id: job.id, child, canceled: false }
+  active.set(job.id, { child, canceled: false })
 
   const stderrLines: string[] = []
   child.stderr.setEncoding('utf8')
@@ -363,8 +363,8 @@ async function spawnAttempt(
 
   const [code] = (await once(child, 'close')) as [number | null]
   if (listPath) rmSync(listPath, { force: true })
-  const canceled = activeJob?.canceled ?? false
-  activeJob = null
+  const canceled = active.get(job.id)?.canceled ?? false
+  active.delete(job.id)
   if (canceled) return { code: -2, stderr: stderrLines.join('\n'), outTimeUs }
   return { code: code ?? -1, stderr: stderrLines.join('\n'), outTimeUs }
 }
@@ -379,6 +379,19 @@ function cleanupPartial(job: Job, options: EncodeOptions): void {
   rmSync(job.outputPath, { force: true })
 }
 
+/** 容器拒绝的码流：ffmpeg 报 “Could not find tag for codec X in stream #N”，据此只回退真正不兼容的那一路 */
+function rejectedCopyStream(
+  stderr: string,
+  videoCodec: string | undefined,
+  audioCodec: string | undefined
+): 'video' | 'audio' | null {
+  const match = /Could not find tag for codec (\S+)/.exec(stderr)
+  if (!match) return null
+  if (audioCodec && match[1] === audioCodec) return 'audio'
+  if (videoCodec && match[1] === videoCodec) return 'video'
+  return null
+}
+
 async function runJob(job: Job): Promise<void> {
   job.status = 'running'
   job.error = null
@@ -389,18 +402,36 @@ async function runJob(job: Job): Promise<void> {
   const notes: string[] = []
   let options = job.options
   let attempt = await spawnAttempt(job, options)
+  let rejected = rejectedCopyStream(attempt.stderr, job.media?.video?.codec, job.media?.audio?.codec)
 
   // 回退 1：复制视频流失败（容器或编码不兼容）→ 重新编码；合并本身即复制，重试无意义
-  if (attempt.code !== 0 && attempt.code !== -2 && options.videoCopy && !job.mergeInputs) {
+  if (attempt.code !== 0 && attempt.code !== -2 && options.videoCopy && !job.mergeInputs && rejected !== 'audio') {
     cleanupPartial(job, options)
     options = { ...options, videoCopy: false }
     notes.push('复制视频流失败（容器或编码不兼容），已自动重新编码')
     job.fallbackNote = notes.join('；')
     emitJob(job)
     attempt = await spawnAttempt(job, options)
+    rejected = rejectedCopyStream(attempt.stderr, job.media?.video?.codec, job.media?.audio?.codec)
   }
 
-  // 回退 2：GPU 编码失败 → 最保守的 CPU + 软件解码
+  // 回退 2：复制音频失败（容器或编码不兼容）→ 重新编码
+  const audioCopyAttempted =
+    options.audioCodec === 'copy' &&
+    !job.mergeInputs &&
+    PRESETS[options.presetId].kind === 'video' &&
+    PRESETS[options.presetId].ext !== 'webm'
+  if (attempt.code !== 0 && attempt.code !== -2 && audioCopyAttempted && rejected !== 'video') {
+    cleanupPartial(job, options)
+    options = { ...options, audioCodec: 'auto' }
+    notes.push('复制音频失败（容器或编码不兼容），已自动重新编码')
+    job.fallbackNote = notes.join('；')
+    emitJob(job)
+    attempt = await spawnAttempt(job, options)
+    rejected = rejectedCopyStream(attempt.stderr, job.media?.video?.codec, job.media?.audio?.codec)
+  }
+
+  // 回退 3：GPU 编码失败 → 最保守的 CPU + 软件解码
   if (attempt.code !== 0 && attempt.code !== -2 && job.usedGpu) {
     cleanupPartial(job, options)
     options = { ...options, accel: 'cpu', hwaccel: false }
@@ -458,6 +489,9 @@ export async function startQueue(): Promise<void> {
   running = true
   batchFinished = 0
   drained.clear()
+  // 并发数在批次开始时快照，批次中途改设置只影响下一批
+  const parallel = Math.max(1, getSettings().parallel)
+  const inFlight = new Set<Promise<void>>()
   try {
     for (;;) {
       for (const job of jobs) {
@@ -466,9 +500,26 @@ export async function startQueue(): Promise<void> {
           settle(job, 'error')
         }
       }
-      const next = jobs.find((job) => job.status === 'queued')
-      if (!next) break
-      await runJob(next)
+      while (inFlight.size < parallel) {
+        // runJob 在第一个 await 前就把状态置为 running，下一次查找不会重复取到同一个任务
+        const next = jobs.find((job) => job.status === 'queued')
+        if (!next) break
+        const task = runJob(next)
+          .catch((error) => {
+            if (next.status === 'done' || next.status === 'error' || next.status === 'canceled') return
+            next.error = `转换失败：${error instanceof Error ? error.message : String(error)}`
+            try {
+              cleanupPartial(next, next.options)
+            } catch {
+              // 清理失败不掩盖原始原因
+            }
+            settle(next, 'error')
+          })
+          .finally(() => inFlight.delete(task))
+        inFlight.add(task)
+      }
+      if (inFlight.size === 0) break
+      await Promise.race([...inFlight])
     }
     const summary = summarizeDrain()
     if (summary.done + summary.failed + summary.canceled > 0) drainListener(summary)
@@ -477,6 +528,8 @@ export async function startQueue(): Promise<void> {
     drained.clear()
     running = false
   }
+  // 批次收尾瞬间新入队（合并/重试/添加）的任务可能被 running=true 挡在门外，补一次启动
+  if (jobs.some((job) => job.status === 'queued')) void startQueue()
 }
 
 export async function cancelJob(id: string): Promise<void> {
@@ -486,11 +539,12 @@ export async function cancelJob(id: string): Promise<void> {
     settle(job, 'canceled')
     return
   }
-  if (job.status === 'running' && activeJob?.id === id) {
-    activeJob.canceled = true
-    const pid = activeJob.child?.pid
-    if (pid) await killTree(pid)
-  }
+  if (job.status !== 'running') return
+  const entry = active.get(id)
+  if (!entry) return
+  entry.canceled = true
+  const pid = entry.child?.pid
+  if (pid) await killTree(pid)
 }
 
 export async function removeJob(id: string): Promise<void> {

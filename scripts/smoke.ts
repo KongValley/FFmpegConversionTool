@@ -137,6 +137,12 @@ async function durationOf(file: string): Promise<number> {
   return Number(result.stdout.trim())
 }
 
+/** 解码音轨的 PCM md5：相同即证明音频码流未被重编码 */
+async function audioMd5(file: string): Promise<string> {
+  const result = await runCommand(ffmpegPath, ['-v', 'error', '-i', file, '-map', '0:a:0', '-f', 'md5', '-'], 120_000)
+  return result.stdout.trim()
+}
+
 async function convert(
   label: string,
   options: EncodeOptions,
@@ -324,6 +330,20 @@ async function main(): Promise<void> {
   const tsOut = await convert('ts-to-mp4-copy', { ...base, videoCopy: true }, 'mp4', nvenc, tsInput)
   if ((await videoCodecOf(tsOut)) !== 'h264') throw new Error('TS 复制封装输出编码不是 h264')
   if ((await audioCodecOf(tsOut)) !== 'aac') throw new Error('TS 复制封装输出音频不是 aac')
+
+  const dualCopyOut = await convert(
+    'ts-to-mp4-dual-copy',
+    { ...base, videoCopy: true, audioCodec: 'copy' },
+    'mp4',
+    nvenc,
+    tsInput
+  )
+  if ((await videoCodecOf(dualCopyOut)) !== 'h264') throw new Error('双流复制输出编码不是 h264')
+  if ((await audioCodecOf(dualCopyOut)) !== 'aac') throw new Error('双流复制输出音频不是 aac')
+  const sourceMd5 = await audioMd5(tsInput)
+  const copiedMd5 = await audioMd5(dualCopyOut)
+  if (sourceMd5 !== copiedMd5) throw new Error(`复制音频后解码 PCM 不一致：${sourceMd5} 与 ${copiedMd5}`)
+  console.log('PASS 双流复制（解码 PCM md5 一致）')
 
   const hlsInput = await makeHls()
   const hlsOut = await convert('hls-to-mp4', { ...base, resolution: '720p' }, 'mp4', nvenc, hlsInput)

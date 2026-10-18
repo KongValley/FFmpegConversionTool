@@ -115,8 +115,13 @@ function videoArgs(encoder: string, o: EncodeOptions): string[] {
   return args
 }
 
+/** 视频预设选择“复制音频”时真正复制源码流（WebM 只能 Opus；原始音轨预设走 preset.audioCopy） */
+function audioCopied(preset: PresetDef, o: EncodeOptions): boolean {
+  return preset.audioCopy === true || (preset.kind === 'video' && preset.ext !== 'webm' && o.audioCodec === 'copy')
+}
+
 function audioArgs(preset: PresetDef, o: EncodeOptions): string[] {
-  if (preset.audioCopy) return ['-c:a', 'copy']
+  if (audioCopied(preset, o)) return ['-c:a', 'copy']
   // 音频预设固定用预设编码器（避免 AAC 写进 .mp3）；视频预设允许在 aac/mp3/opus 间覆盖，
   // WebM 容器强制 Opus。
   const codec =
@@ -219,7 +224,7 @@ export function buildFfmpegArgs(
       }
     }
     args.push(...audioArgs(preset, o))
-    if (o.normalizeAudio && !preset.audioCopy) args.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11')
+    if (o.normalizeAudio && !audioCopied(preset, o)) args.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11')
   }
 
   args.push(...containerArgs(preset, output), ...splitExtraArgs(o.extraArgs), output)

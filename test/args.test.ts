@@ -398,3 +398,41 @@ test('合并参数：concat demuxer + 复制流 + 容器参数', () => {
   const mkv = buildMergeArgs('list.txt', 'out.mkv', { ...base, presetId: 'mkv-h264' })
   assert.ok(!mkv.includes('-movflags'))
 })
+
+test('复制音频：-c:a copy 且不追加码率/声道/采样率/滤镜', () => {
+  const copied = buildFfmpegArgs(
+    'in.ts',
+    'out.mp4',
+    { ...base, audioCodec: 'copy', channels: '2', sampleRate: 48000, normalizeAudio: true },
+    NO_NVENC
+  )
+  assert.equal(copied.args[copied.args.indexOf('-c:a') + 1], 'copy')
+  for (const flag of ['-b:a', '-ac', '-ar', '-af']) {
+    assert.ok(!copied.args.includes(flag), `复制音频不应出现 ${flag}`)
+  }
+
+  const both = buildFfmpegArgs('in.ts', 'out.mp4', { ...base, videoCopy: true, audioCodec: 'copy' }, NO_NVENC)
+  assert.equal(both.args[both.args.indexOf('-c:v') + 1], 'copy')
+  assert.equal(both.args[both.args.indexOf('-c:a') + 1], 'copy')
+
+  // WebM 容器只能 Opus：忽略 copy，归一化仍生效
+  const webm = buildFfmpegArgs(
+    'in.ts',
+    'out.webm',
+    { ...base, presetId: 'webm-vp9', audioCodec: 'copy', normalizeAudio: true },
+    NO_NVENC
+  )
+  assert.equal(webm.args[webm.args.indexOf('-c:a') + 1], 'libopus')
+  assert.ok(webm.args.includes('-af'))
+
+  // 音频预设忽略 copy，仍用预设编码器并允许归一化
+  const mp3 = buildFfmpegArgs(
+    'in.ts',
+    'out.mp3',
+    { ...base, presetId: 'mp3', audioCodec: 'copy', normalizeAudio: true, channels: '2' },
+    NO_NVENC
+  )
+  assert.equal(mp3.args[mp3.args.indexOf('-c:a') + 1], 'libmp3lame')
+  assert.ok(mp3.args.includes('-af'))
+  assert.ok(mp3.args.includes('-ac'))
+})
