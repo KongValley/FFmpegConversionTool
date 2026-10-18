@@ -8,14 +8,17 @@ export interface MediaConverterApi {
     onState(callback: (state: FfmpegState) => void): () => void
   }
   jobs: {
-    enqueue(paths: string[], options: EncodeOptions): Promise<{ jobs: Job[]; skipped: number }>
+    enqueue(paths: string[], options: EncodeOptions): Promise<{ jobs: Job[]; skipped: number; duplicates: number }>
     merge(ids: string[], options: EncodeOptions): Promise<Job>
     start(): Promise<void>
     cancel(id: string): Promise<void>
     remove(id: string): Promise<void>
     removeMany(ids: string[]): Promise<string[]>
     retry(id: string): Promise<Job | null>
+    pause(): Promise<void>
+    resume(): Promise<void>
     onUpdate(callback: (job: Job) => void): () => void
+    list(): Promise<Job[]>
   }
   dialog: {
     pickFiles(): Promise<string[]>
@@ -23,7 +26,7 @@ export interface MediaConverterApi {
   }
   settings: {
     get(): Promise<Settings>
-    set(patch: Partial<Settings>): Promise<Settings>
+    set(patch: Partial<Settings>): Promise<{ settings: Settings; saved: boolean }>
   }
   reveal(path: string): Promise<void>
   appVersion(): Promise<string>

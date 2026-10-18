@@ -12,7 +12,9 @@ export const state = reactive({
     nvenc: null
   } as FfmpegState,
   settings: { ...DEFAULT_SETTINGS, advanced: { ...DEFAULT_ADVANCED } } as Settings,
-  advanced: { ...DEFAULT_ADVANCED }
+  advanced: { ...DEFAULT_ADVANCED },
+  paused: false,
+  settingsSaved: true
 })
 
 function upsert(job: Job): void {
@@ -55,6 +57,8 @@ export async function init(): Promise<() => void> {
     state.ffmpeg = next
   })
   const offUpdate = window.api.jobs.onUpdate(upsert)
+  // 先订阅再拉取：恢复的任务与订阅期间的增量都不会丢
+  state.jobs = await window.api.jobs.list()
   state.ffmpeg = await window.api.ffmpeg.getState()
   const settings = await window.api.settings.get()
   state.settings = settings
@@ -67,7 +71,15 @@ export async function init(): Promise<() => void> {
     () => {
       window.clearTimeout(saveTimer)
       saveTimer = window.setTimeout(() => {
-        void window.api.settings.set({ advanced: { ...state.advanced } })
+        void window.api.settings
+          .set({ advanced: { ...state.advanced } })
+          .then(({ settings, saved }) => {
+            state.settings.advanced = settings.advanced
+            state.settingsSaved = saved
+          })
+          .catch(() => {
+            state.settingsSaved = false
+          })
       }, 400)
     },
     { deep: true }
@@ -81,11 +93,13 @@ export async function init(): Promise<() => void> {
   }
 }
 
-export async function addFiles(paths: string[]): Promise<{ added: number; skipped: number }> {
-  if (paths.length === 0) return { added: 0, skipped: 0 }
-  const { jobs: created, skipped } = await window.api.jobs.enqueue(paths, currentOptions())
+export async function addFiles(
+  paths: string[]
+): Promise<{ added: number; skipped: number; duplicates: number }> {
+  if (paths.length === 0) return { added: 0, skipped: 0, duplicates: 0 }
+  const { jobs: created, skipped, duplicates } = await window.api.jobs.enqueue(paths, currentOptions())
   for (const job of created) upsert(job)
-  return { added: created.length, skipped }
+  return { added: created.length, skipped, duplicates }
 }
 
 export async function startQueue(): Promise<void> {
@@ -184,6 +198,25 @@ export async function cancelAll(): Promise<void> {
   }
 }
 
+/** 暂停队列：主进程中断运行中的任务并退回等待队列，恢复后从头重跑 */
+export async function pauseAll(): Promise<void> {
+  await window.api.jobs.pause()
+  state.paused = true
+}
+
+/** 继续队列：解除暂停，被中断的任务从头重跑 */
+export async function resumeAll(): Promise<void> {
+  await window.api.jobs.resume()
+  state.paused = false
+}
+
 export async function updateSettings(patch: Partial<Settings>): Promise<void> {
-  state.settings = await window.api.settings.set(patch)
+  try {
+    const { settings, saved } = await window.api.settings.set(patch)
+    state.settings = settings
+    state.settingsSaved = saved
+  } catch {
+    // IPC 失败（极端情况）也要让「设置未写入」提示出来，而不是静默丢掉
+    state.settingsSaved = false
+  }
 }

@@ -19,14 +19,17 @@ const api: MediaConverterApi = {
   },
   jobs: {
     enqueue: (paths: string[], options: EncodeOptions) =>
-      ipcRenderer.invoke(IPC.jobsEnqueue, paths, options) as Promise<{ jobs: Job[]; skipped: number }>,
+      ipcRenderer.invoke(IPC.jobsEnqueue, paths, options) as Promise<{ jobs: Job[]; skipped: number; duplicates: number }>,
     merge: (ids: string[], options: EncodeOptions) => ipcRenderer.invoke(IPC.jobsMerge, ids, options) as Promise<Job>,
     start: () => ipcRenderer.invoke(IPC.jobsStart) as Promise<void>,
     cancel: (id: string) => ipcRenderer.invoke(IPC.jobsCancel, id) as Promise<void>,
     remove: (id: string) => ipcRenderer.invoke(IPC.jobsRemove, id) as Promise<void>,
     removeMany: (ids: string[]) => ipcRenderer.invoke(IPC.jobsRemoveMany, ids) as Promise<string[]>,
     retry: (id: string) => ipcRenderer.invoke(IPC.jobsRetry, id) as Promise<Job | null>,
-    onUpdate: (callback) => on<Job>(IPC.jobsUpdate, callback)
+    pause: () => ipcRenderer.invoke(IPC.jobsPause) as Promise<void>,
+    resume: () => ipcRenderer.invoke(IPC.jobsResume) as Promise<void>,
+    onUpdate: (callback) => on<Job>(IPC.jobsUpdate, callback),
+    list: () => ipcRenderer.invoke(IPC.jobsList) as Promise<Job[]>
   },
   dialog: {
     pickFiles: () => ipcRenderer.invoke(IPC.dialogPickFiles) as Promise<string[]>,
@@ -34,7 +37,8 @@ const api: MediaConverterApi = {
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settingsGet) as Promise<Settings>,
-    set: (patch: Partial<Settings>) => ipcRenderer.invoke(IPC.settingsSet, patch) as Promise<Settings>
+    set: (patch: Partial<Settings>) =>
+      ipcRenderer.invoke(IPC.settingsSet, patch) as Promise<{ settings: Settings; saved: boolean }>
   },
   reveal: (path: string) => ipcRenderer.invoke(IPC.shellReveal, path) as Promise<void>,
   appVersion: () => ipcRenderer.invoke(IPC.appGetVersion) as Promise<string>,

@@ -13,14 +13,16 @@ export function getSettings(): Settings {
   }
 }
 
-export function setSettings(patch: Partial<Settings>): Settings {
-  const next = { ...getSettings(), ...patch }
+export function setSettings(patch: Partial<Settings>): { settings: Settings; saved: boolean } {
+  const settings = mergeSettings({ ...getSettings(), ...patch })
+  let saved = true
   try {
     const file = join(app.getPath('userData'), 'settings.json')
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(next, null, 2), 'utf8')
+    writeFileSync(file, JSON.stringify(settings, null, 2), 'utf8')
   } catch (error) {
+    saved = false
     console.error('写入设置失败', error)
   }
-  return next
+  return { settings, saved }
 }

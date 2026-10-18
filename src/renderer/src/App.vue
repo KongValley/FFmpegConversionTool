@@ -13,7 +13,9 @@ import {
   failedCount,
   init,
   mergeSelected,
+  pauseAll,
   removeSelected,
+  resumeAll,
   retryFailed,
   selectableIds,
   selectedCount,
@@ -67,12 +69,16 @@ async function ingest(paths: string[]): Promise<void> {
     return
   }
   try {
-    const { added, skipped } = await addFiles(paths)
-    if (added === 0) {
+    const { added, skipped, duplicates } = await addFiles(paths)
+    if (added === 0 && duplicates === 0) {
       showError('未找到可转换的媒体文件')
       return
     }
-    showNotice(skipped > 0 ? `已添加 ${added} 项，跳过 ${skipped} 项` : `已添加 ${added} 项`)
+    const extra =
+      skipped > 0 || duplicates > 0
+        ? `，跳过 ${skipped + duplicates} 项${duplicates > 0 ? `（其中 ${duplicates} 项已在队列）` : ''}`
+        : ''
+    showNotice(`已添加 ${added} 项${extra}`)
   } catch (error) {
     showError(error)
   }
@@ -123,6 +129,20 @@ async function retryFailedJobs(): Promise<void> {
   try {
     const count = await retryFailed()
     if (count > 0) showNotice(`已重试 ${count} 项`)
+  } catch (error) {
+    showError(error)
+  }
+}
+
+async function togglePause(): Promise<void> {
+  try {
+    if (state.paused) {
+      await resumeAll()
+      showNotice('已继续，被暂停的任务从头重跑')
+    } else {
+      await pauseAll()
+      showNotice('已暂停，运行中的任务已退回队列，继续时从头重跑')
+    }
   } catch (error) {
     showError(error)
   }
@@ -204,7 +224,7 @@ onUnmounted(() => {
           <button
             type="button"
             class="btn btn--primary"
-            :disabled="!ffmpegReady || pendingCount === 0 || busy"
+            :disabled="!ffmpegReady || pendingCount === 0 || busy || state.paused"
             @click="start"
           >
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
@@ -219,11 +239,20 @@ onUnmounted(() => {
             合并所选 ({{ selectedQueuedCount }})
           </button>
           <button type="button" class="btn btn--ghost" :disabled="!busy" @click="cancelAll">取消全部</button>
+          <button
+            type="button"
+            class="btn btn--ghost"
+            :disabled="!state.paused && !busy && pendingCount === 0"
+            @click="togglePause"
+          >
+            {{ state.paused ? '继续队列' : '暂停全部' }}
+          </button>
           <span class="toolbar__spacer"></span>
           <span class="count-chip">队列 {{ state.jobs.length }} 项</span>
         </div>
         <div v-if="errorText" class="alert">{{ errorText }}</div>
         <div v-if="noticeText" class="notice">{{ noticeText }}</div>
+        <div v-if="!state.settingsSaved" class="alert">设置未能写入磁盘（目录只读或空间不足），本次修改仅当前会话有效</div>
         <div v-if="state.jobs.length > 0" class="queue__bar">
           <label class="queue__select-all">
             <input

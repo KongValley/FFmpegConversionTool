@@ -81,6 +81,9 @@ function reveal(): void {
       </div>
       <div v-if="mediaSummary" class="job__meta">{{ mediaSummary }}</div>
 
+      <!-- 目录回退、空间不足等提示在“等待中”阶段就要可见，不能只放在任务落定后的 foot 里 -->
+      <span v-if="job.fallbackNote" class="warn-text">{{ job.fallbackNote }}</span>
+
       <div v-if="job.status === 'running'" class="job__progress">
         <div class="job__track">
           <div
@@ -95,7 +98,6 @@ function reveal(): void {
       <div v-if="job.status !== 'queued'" class="job__foot">
         <span v-if="job.status === 'running' && runningDetail" class="badge">{{ runningDetail }}</span>
         <span v-if="job.usedGpu" class="badge badge--gpu">GPU</span>
-        <span v-if="job.fallbackNote" class="warn-text">{{ job.fallbackNote }}</span>
         <span v-if="job.status === 'done'" class="job__output" :title="job.outputPath">→ {{ outputName }}</span>
       </div>
 

@@ -725,8 +725,34 @@ body {
 
 .field__row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+.field__row > .muted {
+  white-space: nowrap;
+}
+
+.field__row--pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.trim {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.trim .input {
+  width: 100%;
+  min-width: 0;
+}
+
+.trim > .muted {
+  white-space: nowrap;
 }
 
 .field__label {

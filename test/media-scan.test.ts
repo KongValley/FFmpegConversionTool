@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expandMediaPaths } from '../src/main/media-scan'
 import { isMediaFile } from '../src/shared/media'
@@ -48,6 +48,20 @@ test('expandMediaPaths', async (t) => {
     const file = join(dir, 'a.mp4')
     const result = expandMediaPaths([file, file, dir])
     assert.deepEqual(result.files, [file, join(sub, 'b.mp3')])
+  })
+
+  await t.test('无权限子目录跳过并计入跳过，不影响同级文件', () => {
+    const locked = join(dir, 'locked')
+    mkdirSync(locked, { recursive: true })
+    writeFileSync(join(locked, 'c.mp4'), '')
+    const fakeReadDir = ((target: string, options: { withFileTypes: true }) => {
+      if (String(target).endsWith('locked')) throw new Error('EACCES: permission denied')
+      return readdirSync(target, options)
+    }) as unknown as typeof readdirSync
+
+    const result = expandMediaPaths([dir], fakeReadDir)
+    assert.deepEqual(result.files, [join(dir, 'a.mp4'), join(sub, 'b.mp3')])
+    assert.equal(result.skipped, 1)
   })
 })
 

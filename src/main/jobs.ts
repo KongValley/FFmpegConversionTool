@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { app } from 'electron'
@@ -9,11 +9,14 @@ import { concatCompatibilityError, concatListContent } from '../shared/concat'
 import { effectiveDurationMs } from '../shared/trim'
 import { parseProgressLine, progressFrom } from '../shared/progress'
 import { PRESETS, audioCopyExt, supportsUploadCompat } from '../shared/presets'
+import { diskSpaceWarning, estimateOutputBytes } from '../shared/disk'
 import type { EncodeOptions, Job, MediaInfo } from '../shared/types'
 import { getPaths, isInstalled, probeCapabilities } from './ffmpeg/manager'
 import { killTree } from './ffmpeg/exec'
 import { expandMediaPaths } from './media-scan'
+import { checkOutputDir } from './output-dir'
 import { probeMedia } from './probe'
+import { saveQueue, type StoredJob } from './queue-store'
 import { getSettings } from './settings'
 
 export interface DrainSummary {
@@ -26,7 +29,8 @@ export interface DrainSummary {
 const jobs: Job[] = []
 let jobListener: (job: Job) => void = () => undefined
 let drainListener: (summary: DrainSummary) => void = () => undefined
-const active = new Map<string, { child: ChildProcess | null; canceled: boolean }>()
+const active = new Map<string, { child: ChildProcess | null; canceled: boolean; interrupted: boolean }>()
+let paused = false
 let running = false
 let batchFinished = 0
 const drained = new Set<string>()
@@ -82,6 +86,35 @@ function summarizeDrain(): DrainSummary {
 /** 只广播仍在队列里的任务，避免已移除任务被重新插回界面 */
 function emitJob(job: Job): void {
   if (jobs.includes(job)) jobListener({ ...job, progress: { ...job.progress }, options: { ...job.options } })
+  persistQueue()
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | undefined
+let persistedSignature = ''
+
+/** 落盘内容签名：进度刷新不会改变它，避免转换期间把节流窗口一直往后推（否则 wasRunning 可能永远写不进去） */
+function queueSignature(): string {
+  return jobs.map((job) => `${job.id}:${job.status}:${job.outputPath}`).join('|')
+}
+
+/** 队列变化后最多每秒落盘一次；只有签名变化才真正写盘 */
+function persistQueue(): void {
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = undefined
+    const signature = queueSignature()
+    if (signature === persistedSignature) return
+    persistedSignature = signature
+    saveQueue(jobs)
+  }, 1000)
+}
+
+/** 关键节点（恢复、退出）同步落盘，不等节流 */
+function saveQueueNow(list: Job[]): void {
+  clearTimeout(persistTimer)
+  persistTimer = undefined
+  persistedSignature = queueSignature()
+  saveQueue(list)
 }
 
 function emptyProgress(): Job['progress'] {
@@ -123,10 +156,33 @@ export function uniqueOutputDir(inputPath: string, outputDir: string | null): st
   return candidate
 }
 
+/** 指定目录不可用就退回同源目录；返回实际目录与行内提示 */
+function effectiveOutputDir(): { dir: string | null; note: string | null } {
+  const settings = getSettings()
+  if (settings.outputMode !== 'custom' || !settings.outputDir) return { dir: null, note: null }
+  const problem = checkOutputDir(settings.outputDir)
+  if (!problem) return { dir: settings.outputDir, note: null }
+  return { dir: null, note: `输出目录不可用（${problem}），已改为同源目录` }
+}
+
+/** 输出分区的剩余空间（字节）；取不到时返回 null，表示跳过空间检查 */
+function freeBytes(dir: string): number | null {
+  try {
+    const stats = statfsSync(dir)
+    return stats.bavail * stats.bsize
+  } catch {
+    return null
+  }
+}
+
 /** enqueue 与 retry 共用的输出路径计算（原始音轨扩展名随源编码、序列为目录） */
-export function resolveOutputPath(inputPath: string, options: EncodeOptions, media: MediaInfo | null): string {
+export function resolveOutputPath(
+  inputPath: string,
+  options: EncodeOptions,
+  media: MediaInfo | null,
+  outputDir: string | null
+): string {
   const preset = PRESETS[options.presetId]
-  const outputDir = getSettings().outputMode === 'custom' ? getSettings().outputDir : null
   if (preset.audioCopy) return uniqueOutputPath(inputPath, audioCopyExt(media?.audio?.codec), outputDir)
   if (preset.kind === 'image' && options.imageMode === 'sequence') return uniqueOutputDir(inputPath, outputDir)
   return uniqueOutputPath(inputPath, preset.ext, outputDir)
@@ -169,12 +225,12 @@ export async function enqueueMerge(ids: string[], options: EncodeOptions): Promi
 
   const first = selected[0]
   const durations = selected.map((job) => job.media?.durationMs ?? null)
-  const outputDir = getSettings().outputMode === 'custom' ? getSettings().outputDir : null
+  const target = effectiveOutputDir()
   for (const job of selected) jobs.splice(jobs.indexOf(job), 1)
   const merged: Job = {
     id: randomUUID(),
     inputPath: first.inputPath,
-    outputPath: uniqueMergedPath(first.inputPath, preset.ext, outputDir),
+    outputPath: uniqueMergedPath(first.inputPath, preset.ext, target.dir),
     // 合并是复制流：剪辑/滤镜字段不适用，清掉避免影响进度估算
     options: { ...options, trimStartSec: null, trimEndSec: null },
     media: {
@@ -188,7 +244,7 @@ export async function enqueueMerge(ids: string[], options: EncodeOptions): Promi
     status: 'queued',
     progress: emptyProgress(),
     usedGpu: false,
-    fallbackNote: null,
+    fallbackNote: target.note,
     error: null,
     mergeInputs: selected.map((job) => job.inputPath)
   }
@@ -201,16 +257,25 @@ export async function enqueueMerge(ids: string[], options: EncodeOptions): Promi
 export async function enqueueJobs(
   paths: string[],
   options: EncodeOptions
-): Promise<{ jobs: Job[]; skipped: number }> {
+): Promise<{ jobs: Job[]; skipped: number; duplicates: number }> {
   if (!isInstalled()) throw new Error('FFmpeg 尚未安装')
   if (options.uploadCompat && !supportsUploadCompat(options.presetId)) {
     throw new Error('上传兼容只支持目标格式 MP4 (H.264)')
   }
   const { files, skipped } = expandMediaPaths(paths)
   if (files.length === 0) throw new Error('未找到可转换的媒体文件')
+  // 已在队列/正在跑的文件不再重复入队；已完成/失败/取消的不拦，换预设后可以重转
+  const queuedPaths = new Set(
+    jobs
+      .filter((job) => job.status === 'queued' || job.status === 'running')
+      .map((job) => job.inputPath.toLowerCase())
+  )
+  const fresh = files.filter((file) => !queuedPaths.has(file.toLowerCase()))
+  const duplicates = files.length - fresh.length
+  const target = effectiveOutputDir()
   const { ffprobePath } = getPaths()
   const created: Job[] = []
-  for (const inputPath of files) {
+  for (const inputPath of fresh) {
     let media: MediaInfo | null = null
     let error: string | null = null
     try {
@@ -221,13 +286,13 @@ export async function enqueueJobs(
     const job: Job = {
       id: randomUUID(),
       inputPath,
-      outputPath: resolveOutputPath(inputPath, options, media),
+      outputPath: resolveOutputPath(inputPath, options, media, target.dir),
       options: { ...options },
       media,
       status: 'queued',
       progress: emptyProgress(),
       usedGpu: false,
-      fallbackNote: null,
+      fallbackNote: target.note,
       error,
       mergeInputs: null
     }
@@ -235,7 +300,19 @@ export async function enqueueJobs(
     created.push({ ...job })
     emitJob(job)
   }
-  return { jobs: created, skipped }
+  // 剩余空间预检：只提示不阻断（质量模式只能给上界估计，阻断会误伤）
+  if (created.length > 0) {
+    const estimated = created.reduce((sum, job) => sum + (estimateOutputBytes(job.media, options) ?? 0), 0)
+    const free = freeBytes(target.dir ?? dirname(fresh[0]))
+    const warning = free !== null && estimated > 0 ? diskSpaceWarning(estimated, free) : null
+    if (warning) {
+      for (const job of created) {
+        job.fallbackNote = [job.fallbackNote, warning].filter(Boolean).join('；')
+        emitJob(job)
+      }
+    }
+  }
+  return { jobs: created, skipped, duplicates }
 }
 
 /** 失败任务一键重试：重置状态、重新计算不冲突的输出路径，并立刻继续队列 */
@@ -251,17 +328,17 @@ export async function retryJob(id: string): Promise<Job | null> {
     }
   }
   const preset = PRESETS[job.options.presetId]
-  const outputDir = getSettings().outputMode === 'custom' ? getSettings().outputDir : null
+  const target = effectiveOutputDir()
   job.outputPath = job.mergeInputs
-    ? uniqueMergedPath(job.mergeInputs[0], preset.ext, outputDir, job.id)
+    ? uniqueMergedPath(job.mergeInputs[0], preset.ext, target.dir, job.id)
     : preset.audioCopy
-      ? uniqueOutputPath(job.inputPath, audioCopyExt(job.media?.audio?.codec), outputDir, job.id)
+      ? uniqueOutputPath(job.inputPath, audioCopyExt(job.media?.audio?.codec), target.dir, job.id)
       : preset.kind === 'image' && job.options.imageMode === 'sequence'
-        ? uniqueOutputDir(job.inputPath, outputDir)
-        : uniqueOutputPath(job.inputPath, preset.ext, outputDir, job.id)
+        ? uniqueOutputDir(job.inputPath, target.dir)
+        : uniqueOutputPath(job.inputPath, preset.ext, target.dir, job.id)
   job.status = 'queued'
   job.error = null
-  job.fallbackNote = null
+  job.fallbackNote = target.note
   job.usedGpu = false
   job.progress = emptyProgress()
   emitJob(job)
@@ -282,6 +359,8 @@ async function spawnAttempt(
   job: Job,
   options: EncodeOptions
 ): Promise<{ code: number; stderr: string; outTimeUs: number }> {
+  // 暂停期间不再起新进程：直接按“被打断”返回，由 runJob 退回队列
+  if (paused) return { code: -3, stderr: '', outTimeUs: 0 }
   const { ffmpegPath } = getPaths()
   const nvenc = await probeCapabilities()
   const preset = PRESETS[options.presetId]
@@ -298,7 +377,7 @@ async function spawnAttempt(
   // 纯音频输入即便预设支持 NVENC 也不会用到 GPU，徽章不能误报
   job.usedGpu = usedGpu && (job.media?.hasVideo ?? true)
   const child = spawn(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  active.set(job.id, { child, canceled: false })
+  active.set(job.id, { child, canceled: false, interrupted: false })
 
   const stderrLines: string[] = []
   child.stderr.setEncoding('utf8')
@@ -366,9 +445,12 @@ async function spawnAttempt(
 
   const [code] = (await once(child, 'close')) as [number | null]
   if (listPath) rmSync(listPath, { force: true })
-  const canceled = active.get(job.id)?.canceled ?? false
+  const entry = active.get(job.id)
+  const canceled = entry?.canceled ?? false
+  const interrupted = entry?.interrupted ?? false
   active.delete(job.id)
   if (canceled) return { code: -2, stderr: stderrLines.join('\n'), outTimeUs }
+  if (interrupted) return { code: -3, stderr: stderrLines.join('\n'), outTimeUs }
   return { code: code ?? -1, stderr: stderrLines.join('\n'), outTimeUs }
 }
 
@@ -396,15 +478,23 @@ function rejectedCopyStream(
 }
 
 async function runJob(job: Job): Promise<void> {
+  // 入队阶段的提示（输出目录回退、空间不足）要留到运行期，和编码回退说明合并显示
+  const notes: string[] = []
+  const enqueueNote = job.fallbackNote
+  const applyNotes = (): void => {
+    job.fallbackNote = [enqueueNote, notes.join('；')].filter(Boolean).join('；')
+  }
   job.status = 'running'
   job.error = null
-  job.fallbackNote = null
   job.progress = emptyProgress()
   emitJob(job)
 
-  const notes: string[] = []
   let options = job.options
   let attempt = await spawnAttempt(job, options)
+  if (attempt.code === -3) {
+    requeueInterrupted(job)
+    return
+  }
   let rejected = rejectedCopyStream(attempt.stderr, job.media?.video?.codec, job.media?.audio?.codec)
 
   // 回退 1：复制视频流失败（容器或编码不兼容）→ 重新编码；合并本身即复制，重试无意义
@@ -412,9 +502,13 @@ async function runJob(job: Job): Promise<void> {
     cleanupPartial(job, options)
     options = { ...options, videoCopy: false }
     notes.push('复制视频流失败（容器或编码不兼容），已自动重新编码')
-    job.fallbackNote = notes.join('；')
+    applyNotes()
     emitJob(job)
     attempt = await spawnAttempt(job, options)
+    if (attempt.code === -3) {
+      requeueInterrupted(job)
+      return
+    }
     rejected = rejectedCopyStream(attempt.stderr, job.media?.video?.codec, job.media?.audio?.codec)
   }
 
@@ -428,9 +522,13 @@ async function runJob(job: Job): Promise<void> {
     cleanupPartial(job, options)
     options = { ...options, audioCodec: 'auto' }
     notes.push('复制音频失败（容器或编码不兼容），已自动重新编码')
-    job.fallbackNote = notes.join('；')
+    applyNotes()
     emitJob(job)
     attempt = await spawnAttempt(job, options)
+    if (attempt.code === -3) {
+      requeueInterrupted(job)
+      return
+    }
     rejected = rejectedCopyStream(attempt.stderr, job.media?.video?.codec, job.media?.audio?.codec)
   }
 
@@ -439,9 +537,13 @@ async function runJob(job: Job): Promise<void> {
     cleanupPartial(job, options)
     options = { ...options, accel: 'cpu', hwaccel: false }
     notes.push('GPU 编码失败，已自动改用 CPU')
-    job.fallbackNote = notes.join('；')
+    applyNotes()
     emitJob(job)
     attempt = await spawnAttempt(job, options)
+    if (attempt.code === -3) {
+      requeueInterrupted(job)
+      return
+    }
   }
 
   if (attempt.code === -2) {
@@ -482,13 +584,22 @@ async function runJob(job: Job): Promise<void> {
   settle(job, 'error')
 }
 
+/** 暂停打断的任务：删掉半成品、进度归零，退回等待队列，恢复后从头重跑 */
+function requeueInterrupted(job: Job): void {
+  cleanupPartial(job, job.options)
+  job.status = 'queued'
+  job.progress = emptyProgress()
+  job.error = null
+  emitJob(job)
+}
+
 function finishCanceled(job: Job): void {
   cleanupPartial(job, job.options)
   settle(job, 'canceled')
 }
 
 export async function startQueue(): Promise<void> {
-  if (running) return
+  if (running || paused) return
   running = true
   batchFinished = 0
   drained.clear()
@@ -504,6 +615,8 @@ export async function startQueue(): Promise<void> {
         }
       }
       while (inFlight.size < parallel) {
+        // 暂停打断运行中任务后本轮 race 会返回并重新进入这里，必须拦住顺手启动下一个
+        if (paused) break
         // runJob 在第一个 await 前就把状态置为 running，下一次查找不会重复取到同一个任务
         const next = jobs.find((job) => job.status === 'queued')
         if (!next) break
@@ -532,7 +645,69 @@ export async function startQueue(): Promise<void> {
     running = false
   }
   // 批次收尾瞬间新入队（合并/重试/添加）的任务可能被 running=true 挡在门外，补一次启动
-  if (jobs.some((job) => job.status === 'queued')) void startQueue()
+  if (!paused && jobs.some((job) => job.status === 'queued')) void startQueue()
+}
+
+/** 暂停队列：运行中的进程被中断并退回等待队列，恢复后从头重跑 */
+export async function pauseQueue(): Promise<void> {
+  if (paused) return
+  paused = true
+  const targets = [...active.values()]
+  for (const entry of targets) entry.interrupted = true
+  for (const entry of targets) {
+    const pid = entry.child?.pid
+    if (pid) await killTree(pid)
+  }
+}
+
+/** 继续队列：解除暂停并重启批次（被中断的任务从头重跑） */
+export function resumeQueue(): void {
+  if (!paused) return
+  paused = false
+  void startQueue()
+}
+
+/** 启动时恢复上次未完成任务：一律回到等待队列，不自动开始 */
+export function restoreQueue(stored: StoredJob[]): void {
+  for (const item of stored) {
+    if (!existsSync(item.inputPath)) continue
+    // 上次被强行结束时留下的半成品/空壳先删掉，避免 -y 覆盖到一半的坏文件
+    if (item.wasRunning) {
+      try {
+        rmSync(item.outputPath, { recursive: true, force: true })
+      } catch {
+        // 文件被占用时交给 ffmpeg 自己覆盖
+      }
+    }
+    jobs.push({
+      id: item.id,
+      inputPath: item.inputPath,
+      outputPath: item.outputPath,
+      options: item.options,
+      media: item.media,
+      status: 'queued',
+      progress: emptyProgress(),
+      usedGpu: false,
+      fallbackNote: item.wasRunning ? '上次退出时未完成，已恢复到队列' : null,
+      error: null,
+      mergeInputs: item.mergeInputs
+    })
+  }
+  saveQueueNow(jobs)
+}
+
+/** 渲染进程启动时拉取现有队列（含恢复的任务） */
+export function listJobs(): Job[] {
+  return jobs.map((job) => ({ ...job, progress: { ...job.progress }, options: { ...job.options } }))
+}
+
+/** 退出前调用：终止所有运行中的 ffmpeg 并落盘最终队列快照 */
+export async function shutdownQueue(): Promise<void> {
+  for (const entry of [...active.values()]) {
+    const pid = entry.child?.pid
+    if (pid) await killTree(pid)
+  }
+  saveQueueNow(jobs)
 }
 
 export async function cancelJob(id: string): Promise<void> {
@@ -559,6 +734,7 @@ export async function removeJob(id: string): Promise<void> {
     return
   }
   jobs.splice(index, 1)
+  persistQueue()
 }
 
 /** 批量移出队列：只删列表不删文件；运行中的任务由行内“取消”处理，这里跳过 */
@@ -570,5 +746,6 @@ export function removeJobs(ids: string[]): string[] {
     jobs.splice(index, 1)
     removed.push(id)
   }
+  if (removed.length > 0) persistQueue()
   return removed
 }

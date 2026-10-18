@@ -175,7 +175,7 @@ const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:
       <span class="field__label">帧率</span>
       <input
         v-model="fpsInput"
-        class="input input--number"
+        class="input"
         type="number"
         min="1"
         max="240"
@@ -186,19 +186,17 @@ const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:
 
     <div v-if="!isImage" class="field">
       <span class="field__label">剪辑</span>
-      <div class="field__row">
-        <span class="muted">起点</span>
-        <input
-          v-model="trimStartInput"
-          class="input input--number"
-          type="number"
-          min="0"
-          step="0.1"
-          placeholder="从头"
-        />
-        <span class="muted">秒 → 终点</span>
-        <input v-model="trimEndInput" class="input input--number" type="number" min="0" step="0.1" placeholder="到结尾" />
-        <span class="muted">秒</span>
+      <div class="field__row field__row--pair">
+        <label class="trim">
+          <span class="muted">起点</span>
+          <input v-model="trimStartInput" class="input" type="number" min="0" step="0.1" placeholder="从头" />
+          <span class="muted">秒</span>
+        </label>
+        <label class="trim">
+          <span class="muted">终点</span>
+          <input v-model="trimEndInput" class="input" type="number" min="0" step="0.1" placeholder="到结尾" />
+          <span class="muted">秒</span>
+        </label>
       </div>
       <label v-if="showAudio && !audioCopied" class="radio">
         <input v-model="state.advanced.normalizeAudio" type="checkbox" />

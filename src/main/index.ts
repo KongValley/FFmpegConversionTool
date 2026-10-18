@@ -10,15 +10,21 @@ import {
   enqueueJobs,
   enqueueMerge,
   getQueueProgress,
+  pauseQueue,
   removeJob,
   removeJobs,
+  resumeQueue,
+  restoreQueue,
   retryJob,
   setDrainListener,
   setJobListener,
+  shutdownQueue,
   startQueue,
+  listJobs,
   type DrainSummary
 } from './jobs'
 import { getSettings, setSettings } from './settings'
+import { loadQueue } from './queue-store'
 
 let mainWindow: BrowserWindow | null = null
 let installRunning = false
@@ -99,6 +105,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.jobsRemove, (_event, id: string) => removeJob(id))
   ipcMain.handle(IPC.jobsRemoveMany, (_event, ids: string[]) => removeJobs(ids))
   ipcMain.handle(IPC.jobsRetry, (_event, id: string) => retryJob(id))
+  ipcMain.handle(IPC.jobsList, () => listJobs())
+  ipcMain.handle(IPC.jobsPause, () => pauseQueue())
+  ipcMain.handle(IPC.jobsResume, () => resumeQueue())
   ipcMain.handle(IPC.appGetVersion, () => app.getVersion())
   ipcMain.handle(IPC.dialogPickFiles, async () => {
     if (!mainWindow) return []
@@ -180,12 +189,27 @@ app.whenReady().then(() => {
     if (mainWindow && !mainWindow.isFocused()) notifyDrain(summary)
   })
   registerIpc()
+  // 上次未完成的任务先恢复到内存，再开窗，渲染进程 init 时能直接拉到
+  restoreQueue(loadQueue())
   createWindow()
   if (isInstalled()) {
     void refreshReadyState()
   } else {
     void runInstall()
   }
+})
+
+let quitting = false
+
+app.on('before-quit', (event) => {
+  if (quitting) return
+  event.preventDefault()
+  void shutdownQueue()
+    .catch(() => undefined)
+    .finally(() => {
+      quitting = true
+      app.quit()
+    })
 })
 
 app.on('window-all-closed', () => {
