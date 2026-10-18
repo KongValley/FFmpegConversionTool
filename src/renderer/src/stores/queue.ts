@@ -38,6 +38,7 @@ export function currentOptions(): EncodeOptions {
     extraArgs: state.advanced.extraArgs,
     hwaccel: state.advanced.hwaccel,
     videoCopy: state.advanced.videoCopy,
+    uploadCompat: state.advanced.uploadCompat,
     imageMode: state.advanced.imageMode,
     imageTimeSec: state.advanced.imageTimeSec,
     imageIntervalSec: state.advanced.imageIntervalSec,

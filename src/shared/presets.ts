@@ -175,6 +175,11 @@ export const PRESETS: Record<PresetId, PresetDef> = {
 
 export const PRESET_LIST: PresetDef[] = Object.values(PRESETS)
 
+/** 上传兼容（云端/浏览器直连）钉死 MP4 容器 + H.264，只有 mp4-h264 预设满足 */
+export function supportsUploadCompat(presetId: PresetId): boolean {
+  return presetId === 'mp4-h264'
+}
+
 export const PRESET_GROUPS: { label: string; presets: PresetDef[] }[] = [
   { label: '视频', presets: PRESET_LIST.filter((p) => p.kind === 'video') },
   { label: '音频', presets: PRESET_LIST.filter((p) => p.kind === 'audio') },

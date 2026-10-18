@@ -23,6 +23,7 @@ const base: EncodeOptions = {
   extraArgs: '',
   hwaccel: false,
   videoCopy: false,
+  uploadCompat: false,
   imageMode: 'single',
   imageTimeSec: 1,
   imageIntervalSec: 1,
@@ -186,6 +187,31 @@ test('复制视频流只输出 -c:v copy，不带编码/缩放参数', () => {
     assert.ok(!args.includes(flag), `复制模式不应出现 ${flag}`)
   }
   assert.ok(args.includes('-c:a'))
+})
+
+test('上传兼容强制 H.264 High / yuv420p / 去隔行 / AAC 48k 立体声', () => {
+  const { args } = buildFfmpegArgs(
+    'in.ts',
+    'out.mp4',
+    { ...base, uploadCompat: true, videoCopy: true, audioCodec: 'copy', channels: 'source', sampleRate: null },
+    NO_NVENC
+  )
+  const joined = args.join(' ')
+  assert.equal(args[args.indexOf('-c:v') + 1], 'libx264')
+  assert.equal(args[args.indexOf('-profile:v') + 1], 'high')
+  assert.equal(args[args.indexOf('-vf') + 1], 'yadif=deint=interlaced')
+  assert.ok(joined.includes('-pix_fmt yuv420p'))
+  assert.ok(joined.includes('-c:a aac -b:a 192k -ac 2 -ar 48000'))
+  assert.ok(joined.includes('-movflags +faststart'))
+  assert.ok(!joined.includes('-c:v copy'), '上传兼容必须忽略复制模式')
+  assert.ok(!joined.includes('-c:a copy'))
+})
+
+test('上传兼容只对 mp4-h264 生效', () => {
+  const h265 = buildFfmpegArgs('in.mp4', 'out.mp4', { ...base, presetId: 'mp4-h265', uploadCompat: true }, NO_NVENC)
+  assert.ok(!h265.args.includes('-profile:v'))
+  assert.ok(!h265.args.join(' ').includes('yadif'))
+  assert.ok(!h265.args.join(' ').includes('-ac 2'), '视频与音频的上传兼容判定必须一致')
 })
 
 test('容器参数按输出扩展名判断', () => {

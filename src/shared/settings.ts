@@ -12,6 +12,7 @@ export const DEFAULT_ADVANCED: AdvancedOptions = {
   extraArgs: '',
   hwaccel: false,
   videoCopy: false,
+  uploadCompat: false,
   imageMode: 'single',
   imageTimeSec: 1,
   imageIntervalSec: 1,

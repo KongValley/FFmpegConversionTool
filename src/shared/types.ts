@@ -38,6 +38,7 @@ export interface EncodeOptions {
   extraArgs: string
   hwaccel: boolean
   videoCopy: boolean
+  uploadCompat: boolean
   imageMode: 'single' | 'sequence'
   imageTimeSec: number
   imageIntervalSec: number
@@ -95,6 +96,7 @@ export interface AdvancedOptions {
   extraArgs: string
   hwaccel: boolean
   videoCopy: boolean
+  uploadCompat: boolean
   imageMode: 'single' | 'sequence'
   imageTimeSec: number
   imageIntervalSec: number

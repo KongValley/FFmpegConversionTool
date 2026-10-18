@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { PRESETS, PRESET_GROUPS } from '@shared/presets'
+import { PRESETS, PRESET_GROUPS, supportsUploadCompat } from '@shared/presets'
 import type { PresetId, Quality } from '@shared/types'
 import { state, updateSettings } from '@renderer/stores/queue'
 import AdvancedPanel from './AdvancedPanel.vue'
 
 const preset = computed(() => PRESETS[state.settings.presetId])
 const showQuality = computed(() => preset.value.kind === 'video' || preset.value.kind === 'gif')
-const copyMode = computed(() => preset.value.kind === 'video' && state.advanced.videoCopy)
+const copyMode = computed(
+  () => preset.value.kind === 'video' && state.advanced.videoCopy && !state.advanced.uploadCompat
+)
 const hwAvailable = computed(() => preset.value.nvenc !== null)
 const nvencReady = computed(() => {
   const nvenc = state.ffmpeg.nvenc
@@ -27,6 +29,12 @@ const qualities: { value: Quality; label: string }[] = [
 async function pickDir(): Promise<void> {
   const dir = await window.api.dialog.pickDir()
   if (dir) await updateSettings({ outputMode: 'custom', outputDir: dir })
+}
+
+function selectPreset(presetId: PresetId): void {
+  // 上传兼容只对 MP4 (H.264) 有意义，切到其它预设时自动关闭，不留“亮着但不生效”的开关
+  if (!supportsUploadCompat(presetId)) state.advanced.uploadCompat = false
+  void updateSettings({ presetId })
 }
 
 function selectOutputMode(mode: 'source' | 'custom'): void {
@@ -50,7 +58,7 @@ function selectOutputMode(mode: 'source' | 'custom'): void {
         <select
           class="input"
           :value="state.settings.presetId"
-          @change="updateSettings({ presetId: ($event.target as HTMLSelectElement).value as PresetId })"
+          @change="selectPreset(($event.target as HTMLSelectElement).value as PresetId)"
         >
           <optgroup v-for="group in PRESET_GROUPS" :key="group.label" :label="group.label">
             <option v-for="item in group.presets" :key="item.id" :value="item.id">{{ item.label }}</option>

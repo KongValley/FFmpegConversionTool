@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { PRESETS } from '@shared/presets'
+import { PRESETS, supportsUploadCompat } from '@shared/presets'
 import type { Resolution } from '@shared/types'
 import { state } from '@renderer/stores/queue'
 
@@ -10,7 +10,8 @@ const isGif = computed(() => preset.value.kind === 'gif')
 const isImage = computed(() => preset.value.kind === 'image')
 const isVideo = computed(() => preset.value.kind === 'video')
 const audioCopy = computed(() => preset.value.audioCopy === true)
-const copyMode = computed(() => isVideo.value && state.advanced.videoCopy)
+const copyMode = computed(() => isVideo.value && state.advanced.videoCopy && !state.advanced.uploadCompat)
+const uploadCompatAvailable = computed(() => supportsUploadCompat(state.settings.presetId))
 const audioCopied = computed(
   () => isVideo.value && preset.value.ext !== 'webm' && state.advanced.audioCodec === 'copy'
 )
@@ -83,11 +84,25 @@ const cropInvalid = computed(() => state.advanced.crop !== '' && !/^\d+:\d+:\d+:
     <div v-if="isVideo" class="field">
       <span class="field__label">视频编码</span>
       <label class="radio">
-        <input v-model="state.advanced.videoCopy" type="checkbox" />
+        <input
+          v-model="state.advanced.videoCopy"
+          type="checkbox"
+          :disabled="state.advanced.uploadCompat || !uploadCompatAvailable"
+        />
         <span>复制视频流（不重编码，失败自动重新编码）</span>
       </label>
-      <span v-if="copyMode" class="field__hint muted">复制模式不支持缩放/改帧率，分包速度取决于磁盘</span>
+      <span v-if="state.advanced.uploadCompat" class="field__hint muted">上传兼容开启时不走复制模式（会重新编码）</span>
+      <span v-else-if="copyMode" class="field__hint muted">复制模式不支持缩放/改帧率，分包速度取决于磁盘</span>
       <span v-else class="field__hint muted">勾选后仅换容器，秒级完成；目标容器必须支持源编码</span>
+      <label class="radio">
+        <input v-model="state.advanced.uploadCompat" type="checkbox" :disabled="!uploadCompatAvailable" />
+        <span>上传兼容：强制云端/浏览器直连播放</span>
+      </label>
+      <span v-if="!uploadCompatAvailable" class="field__hint muted">仅目标格式为 MP4 (H.264) 时可用</span>
+      <span v-else-if="state.advanced.uploadCompat" class="field__hint muted">
+        固定 H.264 High、8bit 4:2:0、去隔行、AAC 48k 立体声；会忽略“复制视频流”与声道的源设置，合并输出是复制流、不受此限制
+      </span>
+      <span v-else class="field__hint muted">勾选后强制重新编码，上传后无需云端二次处理</span>
     </div>
 
     <div v-if="isVideo" class="field">

@@ -1,5 +1,5 @@
 import type { EncodeOptions, NvencSupport, Resolution } from './types'
-import { PRESETS, type PresetDef, type VideoCodec } from './presets'
+import { PRESETS, supportsUploadCompat, type PresetDef, type VideoCodec } from './presets'
 import { isPlaylistPath } from './media'
 
 const CPU_ENCODER: Record<VideoCodec, string> = {
@@ -117,10 +117,15 @@ function videoArgs(encoder: string, o: EncodeOptions): string[] {
 
 /** 视频预设选择“复制音频”时真正复制源码流（WebM 只能 Opus；原始音轨预设走 preset.audioCopy） */
 function audioCopied(preset: PresetDef, o: EncodeOptions): boolean {
+  if (o.uploadCompat) return false
   return preset.audioCopy === true || (preset.kind === 'video' && preset.ext !== 'webm' && o.audioCodec === 'copy')
 }
 
 function audioArgs(preset: PresetDef, o: EncodeOptions): string[] {
+  // 上传兼容固定 AAC-LC 48k 立体声：6 声道、非 AAC 编码在云端/浏览器播放端一律触发转码
+  if (o.uploadCompat && supportsUploadCompat(preset.id)) {
+    return ['-c:a', 'aac', '-b:a', `${o.audioBitrateKbps}k`, '-ac', '2', '-ar', '48000']
+  }
   if (audioCopied(preset, o)) return ['-c:a', 'copy']
   // 音频预设固定用预设编码器（避免 AAC 写进 .mp3）；视频预设允许在 aac/mp3/opus 间覆盖，
   // WebM 容器强制 Opus。
@@ -165,6 +170,9 @@ export function buildFfmpegArgs(
   nvenc: NvencSupport
 ): { args: string[]; usedGpu: boolean } {
   const preset = PRESETS[o.presetId]
+  // 上传兼容会覆盖复制模式：复制流带不进去隔行/H.264 的保证
+  const uploadCompat = o.uploadCompat && supportsUploadCompat(o.presetId)
+  const copying = o.videoCopy && !uploadCompat
   const args = ['-hide_banner', '-nostdin', '-loglevel', 'warning', '-progress', 'pipe:1', '-nostats', '-y']
   // 本地 m3u8 可能引用网络分片，必须放开协议白名单
   if (isPlaylistPath(input)) args.push('-protocol_whitelist', 'file,http,https,tcp,tls,crypto')
@@ -176,7 +184,7 @@ export function buildFfmpegArgs(
   const trimStart = preset.kind !== 'image' && o.trimStartSec !== null && o.trimStartSec >= 0 ? o.trimStartSec : null
   if (trimStart !== null) args.push('-ss', String(trimStart))
   // -hwaccel 是输入选项，必须排在 -i 之前；音频/GIF/图片与复制模式都用不到
-  if (o.hwaccel && preset.kind === 'video' && !o.videoCopy) args.push('-hwaccel', 'cuda')
+  if (o.hwaccel && preset.kind === 'video' && !copying) args.push('-hwaccel', 'cuda')
   args.push('-i', input)
   // 终点换算成相对起点（或文件开头）的时长；非正值时不加，避免 ffmpeg 报错
   if (preset.kind !== 'image' && o.trimEndSec !== null) {
@@ -209,14 +217,19 @@ export function buildFfmpegArgs(
       args.push('-map', '0:a:0?', '-vn', '-sn', '-dn')
     } else {
       args.push('-map', '0:v:0?', '-map', '0:a:0?', '-sn', '-dn')
-      if (o.videoCopy) {
+      if (copying) {
         // 复制流无法应用滤镜：裁剪/旋转/缩放/帧率整体忽略，时间裁剪仍由 -ss/-t 生效
         args.push('-c:v', 'copy')
       } else {
         const encoder = resolveVideoEncoder(preset, o, nvenc)
         usedGpu = encoder.gpu
-        args.push(...videoArgs(encoder.name, o), '-pix_fmt', 'yuv420p')
+        args.push(...videoArgs(encoder.name, o))
+        // 只钉 profile；level 交给编码器按分辨率写，手写会在 4K 产出非 conformant 流
+        if (uploadCompat) args.push('-profile:v', 'high')
+        args.push('-pix_fmt', 'yuv420p')
         const filters = buildVideoFilters(o)
+        // deint=interlaced 对渐进源是直通，隔行源（1080i TS）才会真正去隔行
+        if (uploadCompat) filters.unshift('yadif=deint=interlaced')
         const scale = scaleExpression(o.resolution)
         if (scale) filters.push(scale)
         if (filters.length > 0) args.push('-vf', filters.join(','))

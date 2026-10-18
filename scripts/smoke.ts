@@ -28,6 +28,7 @@ const base: EncodeOptions = {
   extraArgs: '',
   hwaccel: false,
   videoCopy: false,
+  uploadCompat: false,
   imageMode: 'single',
   imageTimeSec: 1,
   imageIntervalSec: 1,

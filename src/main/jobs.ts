@@ -8,7 +8,7 @@ import { buildFfmpegArgs, buildMergeArgs } from '../shared/args'
 import { concatCompatibilityError, concatListContent } from '../shared/concat'
 import { effectiveDurationMs } from '../shared/trim'
 import { parseProgressLine, progressFrom } from '../shared/progress'
-import { PRESETS, audioCopyExt } from '../shared/presets'
+import { PRESETS, audioCopyExt, supportsUploadCompat } from '../shared/presets'
 import type { EncodeOptions, Job, MediaInfo } from '../shared/types'
 import { getPaths, isInstalled, probeCapabilities } from './ffmpeg/manager'
 import { killTree } from './ffmpeg/exec'
@@ -203,6 +203,9 @@ export async function enqueueJobs(
   options: EncodeOptions
 ): Promise<{ jobs: Job[]; skipped: number }> {
   if (!isInstalled()) throw new Error('FFmpeg 尚未安装')
+  if (options.uploadCompat && !supportsUploadCompat(options.presetId)) {
+    throw new Error('上传兼容只支持目标格式 MP4 (H.264)')
+  }
   const { files, skipped } = expandMediaPaths(paths)
   if (files.length === 0) throw new Error('未找到可转换的媒体文件')
   const { ffprobePath } = getPaths()
