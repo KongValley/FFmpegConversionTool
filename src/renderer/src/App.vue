@@ -233,12 +233,19 @@ onUnmounted(() => {
           <button
             type="button"
             class="btn"
-            :disabled="selectedQueuedCount < 2 || !ffmpegReady || busy || !videoPreset"
+            :disabled="selectedQueuedCount < 2 || !ffmpegReady || busy || !videoPreset || state.paused"
             @click="merge"
           >
             合并所选 ({{ selectedQueuedCount }})
           </button>
-          <button type="button" class="btn btn--ghost" :disabled="!busy" @click="cancelAll">取消全部</button>
+          <button
+            type="button"
+            class="btn btn--ghost"
+            :disabled="!busy && pendingCount === 0"
+            @click="cancelAll"
+          >
+            取消全部
+          </button>
           <button
             type="button"
             class="btn btn--ghost"
