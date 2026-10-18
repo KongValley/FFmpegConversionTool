@@ -123,27 +123,38 @@ onUnmounted(() => {
     @drop.prevent="onDrop"
   >
     <header class="app__header">
-      <h1 class="app__title">音视频转换工具</h1>
-      <span v-if="appVersion" class="muted">v{{ appVersion }}</span>
+      <div class="brand">
+        <span class="brand__logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+        </span>
+        <h1 class="app__title">音视频转换工具</h1>
+        <span v-if="appVersion" class="version-chip">v{{ appVersion }}</span>
+      </div>
       <FfmpegBanner />
     </header>
 
     <div class="app__body">
       <section class="app__main">
         <div class="toolbar">
-          <button type="button" class="btn btn--primary" :disabled="!ffmpegReady" @click="pickFiles">添加文件</button>
+          <button type="button" class="btn btn--primary" :disabled="!ffmpegReady" @click="pickFiles">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" stroke-linecap="round" />
+            </svg>
+            添加文件
+          </button>
           <button
             type="button"
             class="btn btn--primary"
             :disabled="!ffmpegReady || pendingCount === 0 || busy"
             @click="start"
           >
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
             开始转换
           </button>
-          <button type="button" class="btn" :disabled="!busy" @click="cancelAll">取消全部</button>
-          <button type="button" class="btn" @click="clearFinished">清空已完成</button>
+          <button type="button" class="btn btn--ghost" :disabled="!busy" @click="cancelAll">取消全部</button>
+          <button type="button" class="btn btn--ghost" @click="clearFinished">清空已完成</button>
           <span class="toolbar__spacer"></span>
-          <span class="muted">队列 {{ state.jobs.length }} 项</span>
+          <span class="count-chip">队列 {{ state.jobs.length }} 项</span>
         </div>
         <div v-if="errorText" class="alert">{{ errorText }}</div>
         <div v-if="noticeText" class="notice">{{ noticeText }}</div>
@@ -155,6 +166,24 @@ onUnmounted(() => {
       </aside>
     </div>
 
-    <div v-if="dragging" class="drop-overlay">松开鼠标以添加文件或文件夹</div>
+    <div v-if="dragging" class="drop-overlay">
+      <div class="drop-overlay__card">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 4v10" />
+          <path d="m7 11 5 5 5-5" />
+          <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
+        </svg>
+        <span>松开以添加文件或文件夹</span>
+        <span class="drop-overlay__hint">支持视频、音频、m3u8 播放列表与整个文件夹</span>
+      </div>
+    </div>
   </div>
 </template>

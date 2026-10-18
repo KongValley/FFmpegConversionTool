@@ -15,11 +15,17 @@ const STATUS_TEXT: Record<Job['status'], string> = {
 
 const fileName = computed(() => props.job.inputPath.split(/[\\/]/).pop() ?? props.job.inputPath)
 
-const statusText = computed(() => (props.job.status === 'queued' && props.job.error ? '探测失败' : STATUS_TEXT[props.job.status]))
+const statusText = computed(() =>
+  props.job.status === 'queued' && props.job.error ? '探测失败' : STATUS_TEXT[props.job.status]
+)
+
+const pillClass = computed(() =>
+  props.job.status === 'queued' && props.job.error ? 'pill--error' : `pill--${props.job.status}`
+)
 
 const mediaSummary = computed(() => {
   const media = props.job.media
-  if (!media) return props.job.error ?? '未探测'
+  if (!media) return ''
   const parts: string[] = []
   if (media.durationMs !== null) {
     const total = Math.round(media.durationMs / 1000)
@@ -57,13 +63,14 @@ function reveal(): void {
 </script>
 
 <template>
-  <div class="job" :class="`job--${job.status}`">
+  <article class="job" :class="`job--${job.status}`">
     <div class="job__main">
-      <div class="job__title">
+      <div class="job__head">
         <span class="job__name" :title="job.inputPath">{{ fileName }}</span>
-        <span class="job__status">{{ statusText }}</span>
+        <span class="pill" :class="pillClass">{{ statusText }}</span>
       </div>
-      <div class="job__meta muted">{{ mediaSummary }}</div>
+      <div v-if="mediaSummary" class="job__meta">{{ mediaSummary }}</div>
+
       <div v-if="job.status === 'running'" class="job__progress">
         <div class="job__track">
           <div
@@ -72,23 +79,38 @@ function reveal(): void {
             :style="percent === null ? undefined : { width: `${percent}%` }"
           ></div>
         </div>
-        <span class="job__percent">{{ percent === null ? '—' : `${percent.toFixed(0)}%` }}</span>
+        <span class="job__percent">{{ percent === null ? '—' : `${Math.round(percent)}%` }}</span>
       </div>
-      <div v-if="job.status === 'running'" class="job__meta muted">{{ runningDetail }}</div>
-      <div v-if="job.usedGpu && job.status !== 'queued'" class="job__meta badge badge--gpu">GPU 编码</div>
-      <div v-if="job.fallbackNote" class="job__meta warn-text">{{ job.fallbackNote }}</div>
-      <div v-if="job.error" class="job__error error-text">{{ job.error }}</div>
-      <div v-if="job.status === 'done'" class="job__meta muted" :title="job.outputPath">输出：{{ outputName }}</div>
+
+      <div v-if="job.status !== 'queued'" class="job__foot">
+        <span v-if="job.status === 'running' && runningDetail" class="badge">{{ runningDetail }}</span>
+        <span v-if="job.usedGpu" class="badge badge--gpu">GPU</span>
+        <span v-if="job.fallbackNote" class="warn-text">{{ job.fallbackNote }}</span>
+        <span v-if="job.status === 'done'" class="job__output" :title="job.outputPath">→ {{ outputName }}</span>
+      </div>
+
+      <div v-if="job.error" class="job__error">{{ job.error }}</div>
     </div>
+
     <div class="job__actions">
-      <button v-if="job.status === 'running' || job.status === 'queued'" type="button" class="btn btn--small" @click="cancelJob(job.id)">
+      <button
+        v-if="job.status === 'running' || job.status === 'queued'"
+        type="button"
+        class="btn btn--small"
+        @click="cancelJob(job.id)"
+      >
         取消
       </button>
       <button v-if="job.status === 'error'" type="button" class="btn btn--small" @click="retryJob(job.id)">重试</button>
-      <button v-if="job.status !== 'running'" type="button" class="btn btn--small" @click="removeJob(job.id)">移除</button>
-      <button v-if="job.status === 'done'" type="button" class="btn btn--small" @click="reveal">
-        打开所在文件夹
+      <button
+        v-if="job.status !== 'running'"
+        type="button"
+        class="btn btn--small btn--ghost"
+        @click="removeJob(job.id)"
+      >
+        移除
       </button>
+      <button v-if="job.status === 'done'" type="button" class="btn btn--small" @click="reveal">打开文件夹</button>
     </div>
-  </div>
+  </article>
 </template>

@@ -71,17 +71,18 @@ watch(fpsInput, (value) => {
         <input v-model="state.advanced.rateMode" type="radio" value="bitrate" :disabled="copyMode" />
         <span>指定码率</span>
       </label>
-      <input
-        v-model.number="state.advanced.videoBitrateKbps"
-        class="input input--number"
-        type="number"
-        min="100"
-        step="100"
-        :disabled="copyMode || state.advanced.rateMode !== 'bitrate'"
-      />
-      <span class="muted">kbps</span>
+      <div class="field__row">
+        <input
+          v-model.number="state.advanced.videoBitrateKbps"
+          class="input input--number"
+          type="number"
+          min="100"
+          step="100"
+          :disabled="copyMode || state.advanced.rateMode !== 'bitrate'"
+        />
+        <span class="muted">kbps</span>
+      </div>
     </div>
-
     <div v-if="isImage" class="field">
       <span class="field__label">导出方式</span>
       <select v-model="state.advanced.imageMode" class="input">
@@ -154,8 +155,16 @@ watch(fpsInput, (value) => {
 
       <label v-if="showAudioBitrate" class="field">
         <span class="field__label">音频码率</span>
-        <input v-model.number="state.advanced.audioBitrateKbps" class="input input--number" type="number" min="32" step="32" />
-        <span class="muted">kbps</span>
+        <div class="field__row">
+          <input
+            v-model.number="state.advanced.audioBitrateKbps"
+            class="input input--number"
+            type="number"
+            min="32"
+            step="32"
+          />
+          <span class="muted">kbps</span>
+        </div>
       </label>
 
       <label class="field">
