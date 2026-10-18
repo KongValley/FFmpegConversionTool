@@ -1,4 +1,5 @@
 import { runCommand } from './ffmpeg/exec'
+import { isPlaylistPath } from '../shared/media'
 import type { MediaInfo } from '../shared/types'
 
 interface FfprobeStream {
@@ -32,11 +33,11 @@ const parseFps = (value: string | undefined): number | null => {
 }
 
 export async function probeMedia(inputPath: string, ffprobePath: string): Promise<MediaInfo> {
-  const result = await runCommand(
-    ffprobePath,
-    ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', inputPath],
-    30_000
-  )
+  const args = ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams']
+  // 本地 m3u8 可能引用网络分片，放开协议白名单后再探测
+  if (isPlaylistPath(inputPath)) args.push('-protocol_whitelist', 'file,http,https,tcp,tls,crypto')
+  args.push(inputPath)
+  const result = await runCommand(ffprobePath, args, 30_000)
   if (result.code !== 0) throw new Error('无法识别的媒体文件')
   let parsed: { streams?: FfprobeStream[]; format?: FfprobeFormat }
   try {

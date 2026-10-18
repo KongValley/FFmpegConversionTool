@@ -4,11 +4,18 @@ export type PresetId =
   | 'mp4-av1'
   | 'webm-vp9'
   | 'mkv-h265'
+  | 'mkv-h264'
+  | 'mov-h264'
   | 'mp3'
   | 'm4a'
   | 'wav'
   | 'flac'
+  | 'ogg-opus'
+  | 'aac'
+  | 'audio-copy'
   | 'gif'
+  | 'png'
+  | 'jpg'
 
 export type Quality = 'high' | 'medium' | 'low'
 export type AccelMode = 'auto' | 'cpu'
@@ -30,6 +37,10 @@ export interface EncodeOptions {
   sampleRate: number | null
   extraArgs: string
   hwaccel: boolean
+  videoCopy: boolean
+  imageMode: 'single' | 'sequence'
+  imageTimeSec: number
+  imageIntervalSec: number
 }
 
 export interface MediaInfo {
@@ -76,6 +87,10 @@ export interface AdvancedOptions {
   sampleRate: number | null
   extraArgs: string
   hwaccel: boolean
+  videoCopy: boolean
+  imageMode: 'single' | 'sequence'
+  imageTimeSec: number
+  imageIntervalSec: number
 }
 
 export interface WindowState {

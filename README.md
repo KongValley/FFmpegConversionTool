@@ -8,7 +8,10 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 ## 功能
 
 - **批量队列**：一次拖入多个文件或整个文件夹（递归收集媒体文件），串行转换，可单独取消或全部取消。
-- **预设格式**：MP4（H.264 / H.265 / AV1）、MKV（H.265）、WebM（VP9）、MP3、M4A、WAV、FLAC、GIF。
+- **输入**：常见音视频格式，外加 MPEG-TS 分片与本地 HLS 播放列表（`.m3u8` / `.m3u`，分片可位于同目录或网络地址）。
+- **预设格式**：MP4（H.264 / H.265 / AV1）、MKV（H.264 / H.265）、MOV（H.264）、WebM（VP9）、MP3、M4A、WAV、FLAC、OGG（Opus）、AAC、原始音轨、GIF、PNG / JPG 图片。
+- **容器互转与免重编码**：勾选“复制视频流”即可只换封装（TS → MP4 秒级完成），容器或编码不兼容时自动重新编码并提示。
+- **图片帧导出**：PNG / JPG 单帧（指定时间点）或按固定间隔导出序列目录。
 - **硬件加速**：NVENC 优先（H.264/H.265/AV1），启动时用黑帧实机验证驱动可用性；GPU 编码失败自动回退 CPU 并提示。高级面板可额外开启 `-hwaccel cuda` 硬件解码。
 - **高级参数**：质量优先（CRF/CQ）或指定码率、分辨率（含自定义 W×H）、帧率、音频编码/码率/声道/采样率、追加任意 FFmpeg 参数。
 - **失败重试**：失败任务一键重试，重新探测媒体信息并重新计算不冲突的输出路径。
@@ -33,7 +36,7 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 | 操作 | 说明 |
 |---|---|
 | 添加 | 拖入文件/文件夹，或点“添加文件”；添加后提示“已添加 N 项（，跳过 M 项）” |
-| 格式 | 右侧“目标格式”分组为 视频 / 音频 / 动图 |
+| 格式 | 右侧“目标格式”分组为 视频 / 音频 / 动图 / 图片 |
 | 质量 | 高 / 中 / 低（音频预设不显示，改用音频码率） |
 | 加速 | `自动（GPU 优先）` 或 `仅 CPU`；无硬件编码器的格式会禁用并说明 |
 | 输出目录 | 默认同源目录，可改为指定目录（自动递归创建） |
@@ -50,9 +53,17 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 | MP4 (H.265) | mp4 | `hevc_nvenc` / `libx265` | aac（写入 `hvc1` 标签） |
 | MP4 (AV1) | mp4 | `av1_nvenc` / `libsvtav1` | aac |
 | MKV (H.265) | mkv | `hevc_nvenc` / `libx265` | aac |
+| MKV (H.264) | mkv | `h264_nvenc` / `libx264` | aac |
+| MOV (H.264) | mov | `h264_nvenc` / `libx264` | aac |
 | WebM (VP9) | webm | 无硬件编码器，`libvpx-vp9` | libopus |
 | MP3 / M4A / WAV / FLAC | mp3 / m4a / wav / flac | 仅音频（`-vn`） | libmp3lame / aac / pcm_s16le / flac |
+| OGG (Opus) | ogg | 仅音频 | libopus |
+| AAC (.aac) | aac | 仅音频 | aac |
+| 原始音轨（不重编码） | 随源编码 | 仅音频，`-c:a copy` | 无（直接复制） |
 | GIF | gif | palettegen + paletteuse（15 fps） | 无 |
+| PNG / JPG 图片 | png / jpg | 单帧或间隔序列，`-an` | 无 |
+
+原始音轨的输出扩展名按源音频编码决定：`aac→m4a`、`mp3→mp3`、`opus→opus`、`vorbis→ogg`、`flac→flac`、`alac→m4a`、PCM 系列→`wav`、`ac3/eac3` 同名，其余落入 `mka`。
 
 质量档位对应编码参数：
 
@@ -65,6 +76,19 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 | h264_nvenc | p6 / CQ 19 | p5 / CQ 23 | p4 / CQ 28 |
 | hevc_nvenc | p6 / CQ 21 | p5 / CQ 25 | p4 / CQ 29 |
 | av1_nvenc | p6 / CQ 24 | p5 / CQ 28 | p4 / CQ 32 |
+
+## 互转速查
+
+| 想做什么 | 选择 |
+|---|---|
+| 换容器不重编码（TS/MKV/MOV → MP4 等，秒级） | 目标容器预设 + 高级面板勾选“复制视频流” |
+| 视频压缩 | MP4 (H.264/H.265/AV1) 或 MKV / MOV，质量高/中/低 |
+| 视频提取音频（重编码） | MP3 / M4A / WAV / FLAC / OGG (Opus) / AAC |
+| 视频提取原音轨（不重编码） | 原始音轨（不重编码），扩展名随源编码 |
+| 音频之间互转 | MP3 / M4A / WAV / FLAC / OGG (Opus) / AAC 任意互转 |
+| HLS/TS 转 MP4 | 拖入 `.m3u8` 或单个 `.ts`，选 MP4 (H.264)，可叠加“复制视频流” |
+| 视频转 GIF | GIF（15 fps，宽度取“分辨率”） |
+| 视频取帧/截图 | PNG / JPG 图片：单帧（时间点）或间隔序列目录 |
 
 ## 环境变量
 
@@ -80,7 +104,7 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 | 场景 | 操作 | 结果 |
 |---|---|---|
 | 本地自用 | `npm run dist` | 只在 `release/` 生成 zip，不发布（`--publish never`） |
-| 云端发布 | `git tag v0.1.0 && git push origin v0.1.0` | 触发 `.github/workflows/release.yml`：类型检查 + 单元测试 → 打包 → 发布 GitHub Release（附件即 zip） |
+| 云端发布 | `git tag v0.2.0 && git push origin v0.2.0` | 触发 `.github/workflows/release.yml`：类型检查 + 单元测试 → 打包 → 发布 GitHub Release（附件即 zip） |
 | 仅构建不发版 | Actions 页面手动 `Run workflow` | 上传构建物到该次运行的 Artifacts，不创建 Release |
 
 - 打 tag 前请同步 `package.json` 的 `version`：CI 会校验两者一致，不一致直接失败。
@@ -95,7 +119,7 @@ npm install
 npm run dev        # 开发模式启动（electron-vite + HMR）
 npm run typecheck  # vue-tsc + tsc，零告警
 npm test           # 单元测试：参数生成、进度解析、路径扫描
-npm run smoke      # 真实转码冒烟：CPU/GPU 编码、硬件解码、mp3、gif（首次约 200MB 下载）
+npm run smoke      # 真实转码冒烟：CPU/GPU 编码、硬件解码、TS→MP4 复制、HLS、音频互转、图片帧（首次约 200MB 下载）
 npm run dist       # 打包免安装 zip 到 release/
 ```
 
@@ -120,6 +144,11 @@ scripts/      smoke.ts（真实转码验证）、make-icon.mjs（生成应用图
 - 只保留首条视频与首条音频流，字幕与数据流不写入输出（`-sn -dn`）。
 - “额外 FFmpeg 参数”按空白切分，不支持引号与转义。
 - GIF 固定 15 fps，仅“分辨率”中的宽度生效。
+- 复制视频流模式下不支持缩放与改帧率（`-vf`/`-r` 无法作用于复制的码流）；目标容器不支持源编码时自动重新编码并提示。
+- m3u8 仅支持本地播放列表文件；其分片可在同目录或网络地址（播放列表会自动放开 `file,http,https,tcp,tls,crypto` 协议白名单）。拖入整个 HLS 目录会把 `.ts` 分片当独立文件入队，请直接拖播放列表。
+- 没有 `#EXT-X-ENDLIST` 的直播播放列表会一直转码下去（进度按已知时长显示），需要手动取消；录播播放列表（含 ENDLIST）会正常结束。
+- 图片序列输出到 `<原名>_converted_frames` 目录，帧从 `0001.png` 起编号；间隔为整数秒。
+- 原始音轨的输出扩展名取决于源音频编码，未知编码输出 `.mka`。
 - 硬件解码开关仅对 NVDEC 支持的编码有效；遇到不支持的编码 FFmpeg 会回退软件解码，失败时请关闭该开关重新添加文件。
 - 队列为串行执行（单个任务占满时不会并发编码）。
 

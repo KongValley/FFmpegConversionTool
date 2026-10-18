@@ -6,7 +6,8 @@ import { state, updateSettings } from '@renderer/stores/queue'
 import AdvancedPanel from './AdvancedPanel.vue'
 
 const preset = computed(() => PRESETS[state.settings.presetId])
-const showQuality = computed(() => preset.value.kind !== 'audio')
+const showQuality = computed(() => preset.value.kind === 'video' || preset.value.kind === 'gif')
+const copyMode = computed(() => preset.value.kind === 'video' && state.advanced.videoCopy)
 const hwAvailable = computed(() => preset.value.nvenc !== null)
 const nvencReady = computed(() => {
   const nvenc = state.ffmpeg.nvenc
@@ -63,6 +64,7 @@ function selectOutputMode(mode: 'source' | 'custom'): void {
           type="button"
           class="segmented__item"
           :class="{ 'segmented__item--active': state.settings.quality === item.value }"
+          :disabled="copyMode"
           @click="updateSettings({ quality: item.value })"
         >
           {{ item.label }}
@@ -74,14 +76,15 @@ function selectOutputMode(mode: 'source' | 'custom'): void {
       <span class="field__label">加速</span>
       <select
         class="input"
-        :disabled="!hwAvailable"
+        :disabled="!hwAvailable || copyMode"
         :value="state.settings.accel"
         @change="updateSettings({ accel: ($event.target as HTMLSelectElement).value as 'auto' | 'cpu' })"
       >
         <option value="auto">自动（GPU 优先）</option>
         <option value="cpu">仅 CPU</option>
       </select>
-      <span v-if="!hwAvailable" class="field__hint muted">该格式无硬件编码器</span>
+      <span v-if="copyMode" class="field__hint muted">复制模式直接封装，不重新编码</span>
+      <span v-else-if="!hwAvailable" class="field__hint muted">该格式无硬件编码器</span>
       <span v-else-if="!nvencReady" class="field__hint muted">GPU 不可用，将使用 CPU</span>
       <span v-else class="field__hint muted">将使用 NVENC 硬件编码</span>
     </label>

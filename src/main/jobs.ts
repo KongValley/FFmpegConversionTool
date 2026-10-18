@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { buildFfmpegArgs } from '../shared/args'
 import { parseProgressLine, progressFrom } from '../shared/progress'
-import { PRESETS } from '../shared/presets'
-import type { EncodeOptions, Job } from '../shared/types'
+import { PRESETS, audioCopyExt } from '../shared/presets'
+import type { EncodeOptions, Job, MediaInfo } from '../shared/types'
 import { getPaths, isInstalled, probeCapabilities } from './ffmpeg/manager'
 import { killTree } from './ffmpeg/exec'
 import { expandMediaPaths } from './media-scan'
@@ -106,6 +106,29 @@ export function uniqueOutputPath(
   return candidate
 }
 
+/** 图片序列导出到独立目录：<原名>_converted_frames，重名递增 */
+export function uniqueOutputDir(inputPath: string, outputDir: string | null): string {
+  const dir = outputDir ?? dirname(inputPath)
+  const base = basename(inputPath, extname(inputPath))
+  let candidate = join(dir, `${base}_converted_frames`)
+  let index = 2
+  while (existsSync(candidate)) {
+    candidate = join(dir, `${base}_converted_frames_${index}`)
+    index += 1
+  }
+  mkdirSync(candidate, { recursive: true })
+  return candidate
+}
+
+/** enqueue 与 retry 共用的输出路径计算（原始音轨扩展名随源编码、序列为目录） */
+export function resolveOutputPath(inputPath: string, options: EncodeOptions, media: MediaInfo | null): string {
+  const preset = PRESETS[options.presetId]
+  const outputDir = getSettings().outputMode === 'custom' ? getSettings().outputDir : null
+  if (preset.audioCopy) return uniqueOutputPath(inputPath, audioCopyExt(media?.audio?.codec), outputDir)
+  if (preset.kind === 'image' && options.imageMode === 'sequence') return uniqueOutputDir(inputPath, outputDir)
+  return uniqueOutputPath(inputPath, preset.ext, outputDir)
+}
+
 export async function enqueueJobs(
   paths: string[],
   options: EncodeOptions
@@ -114,27 +137,26 @@ export async function enqueueJobs(
   const { files, skipped } = expandMediaPaths(paths)
   if (files.length === 0) throw new Error('未找到可转换的媒体文件')
   const { ffprobePath } = getPaths()
-  const settings = getSettings()
-  const outputDir = settings.outputMode === 'custom' ? settings.outputDir : null
-  const ext = PRESETS[options.presetId].ext
   const created: Job[] = []
   for (const inputPath of files) {
+    let media: MediaInfo | null = null
+    let error: string | null = null
+    try {
+      media = await probeMedia(inputPath, ffprobePath)
+    } catch (probeError) {
+      error = probeError instanceof Error ? probeError.message : String(probeError)
+    }
     const job: Job = {
       id: randomUUID(),
       inputPath,
-      outputPath: uniqueOutputPath(inputPath, ext, outputDir),
+      outputPath: resolveOutputPath(inputPath, options, media),
       options: { ...options },
-      media: null,
+      media,
       status: 'queued',
       progress: emptyProgress(),
       usedGpu: false,
       fallbackNote: null,
-      error: null
-    }
-    try {
-      job.media = await probeMedia(inputPath, ffprobePath)
-    } catch (error) {
-      job.error = error instanceof Error ? error.message : String(error)
+      error
     }
     jobs.push(job)
     created.push({ ...job })
@@ -155,9 +177,13 @@ export async function retryJob(id: string): Promise<Job | null> {
       job.media = null
     }
   }
-  const settings = getSettings()
-  const outputDir = settings.outputMode === 'custom' ? settings.outputDir : null
-  job.outputPath = uniqueOutputPath(job.inputPath, PRESETS[job.options.presetId].ext, outputDir, job.id)
+  const preset = PRESETS[job.options.presetId]
+  const outputDir = getSettings().outputMode === 'custom' ? getSettings().outputDir : null
+  job.outputPath = preset.audioCopy
+    ? uniqueOutputPath(job.inputPath, audioCopyExt(job.media?.audio?.codec), outputDir, job.id)
+    : preset.kind === 'image' && job.options.imageMode === 'sequence'
+      ? uniqueOutputDir(job.inputPath, outputDir)
+      : uniqueOutputPath(job.inputPath, preset.ext, outputDir, job.id)
   job.status = 'queued'
   job.error = null
   job.fallbackNote = null
@@ -171,7 +197,13 @@ export async function retryJob(id: string): Promise<Job | null> {
 async function spawnAttempt(job: Job, options: EncodeOptions): Promise<{ code: number; stderr: string }> {
   const { ffmpegPath } = getPaths()
   const nvenc = await probeCapabilities()
-  const { args, usedGpu } = buildFfmpegArgs(job.inputPath, job.outputPath, options, nvenc)
+  const preset = PRESETS[options.presetId]
+  // 图片序列输出到目录内的编号文件，其余输出为单一路径
+  const outputArg =
+    preset.kind === 'image' && options.imageMode === 'sequence'
+      ? join(job.outputPath, `%04d.${preset.ext}`)
+      : job.outputPath
+  const { args, usedGpu } = buildFfmpegArgs(job.inputPath, outputArg, options, nvenc)
   // 纯音频输入即便预设支持 NVENC 也不会用到 GPU，徽章不能误报
   job.usedGpu = usedGpu && (job.media?.hasVideo ?? true)
   const child = spawn(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -248,6 +280,16 @@ async function spawnAttempt(job: Job, options: EncodeOptions): Promise<{ code: n
   return { code: code ?? -1, stderr: stderrLines.join('\n') }
 }
 
+/** 图片序列的产物是一个目录，其余是单个文件 */
+function cleanupPartial(job: Job, options: EncodeOptions): void {
+  const preset = PRESETS[options.presetId]
+  if (preset.kind === 'image' && options.imageMode === 'sequence') {
+    rmSync(job.outputPath, { recursive: true, force: true })
+    return
+  }
+  rmSync(job.outputPath, { force: true })
+}
+
 async function runJob(job: Job): Promise<void> {
   job.status = 'running'
   job.error = null
@@ -255,37 +297,61 @@ async function runJob(job: Job): Promise<void> {
   job.progress = emptyProgress()
   emitJob(job)
 
-  let attempt = await spawnAttempt(job, job.options)
+  const notes: string[] = []
+  let options = job.options
+  let attempt = await spawnAttempt(job, options)
+
+  // 回退 1：复制视频流失败（容器或编码不兼容）→ 重新编码
+  if (attempt.code !== 0 && attempt.code !== -2 && options.videoCopy) {
+    cleanupPartial(job, options)
+    options = { ...options, videoCopy: false }
+    notes.push('复制视频流失败（容器或编码不兼容），已自动重新编码')
+    job.fallbackNote = notes.join('；')
+    emitJob(job)
+    attempt = await spawnAttempt(job, options)
+  }
+
+  // 回退 2：GPU 编码失败 → 最保守的 CPU + 软件解码
+  if (attempt.code !== 0 && attempt.code !== -2 && job.usedGpu) {
+    cleanupPartial(job, options)
+    options = { ...options, accel: 'cpu', hwaccel: false }
+    notes.push('GPU 编码失败，已自动改用 CPU')
+    job.fallbackNote = notes.join('；')
+    emitJob(job)
+    attempt = await spawnAttempt(job, options)
+  }
+
   if (attempt.code === -2) {
     finishCanceled(job)
     return
   }
-  if (attempt.code !== 0 && job.usedGpu && !job.fallbackNote) {
-    rmSync(job.outputPath, { force: true })
-    // 回退到最保守的组合：CPU 编码 + 软件解码，避免解码路径再次失败
-    job.fallbackNote = job.options.hwaccel
-      ? 'GPU 编码失败，已自动改用 CPU（同时关闭硬件解码）'
-      : 'GPU 编码失败，已自动改用 CPU'
-    emitJob(job)
-    attempt = await spawnAttempt(job, { ...job.options, accel: 'cpu', hwaccel: false })
-    if (attempt.code === -2) {
-      finishCanceled(job)
-      return
-    }
-  }
-
   if (attempt.code === 0) {
+    // ffmpeg 对超出时长的截图会以退出码 0 结束但不写文件，必须核实产物
+    const preset = PRESETS[options.presetId]
+    if (preset.kind === 'image') {
+      const produced =
+        options.imageMode === 'sequence' ? readdirSync(job.outputPath).length > 0 : existsSync(job.outputPath)
+      if (!produced) {
+        job.error =
+          options.imageMode === 'sequence'
+            ? '没有可导出的画面'
+            : '该时间点没有可导出的画面（时间点可能超出视频时长）'
+        cleanupPartial(job, options)
+        settle(job, 'error')
+        return
+      }
+    }
     job.progress = { ...job.progress, percent: 100 }
     settle(job, 'done')
     return
   }
   job.error = `FFmpeg 失败（退出码 ${attempt.code}）\n${attempt.stderr}`
-  rmSync(job.outputPath, { force: true })
+  cleanupPartial(job, options)
   settle(job, 'error')
 }
 
 function finishCanceled(job: Job): void {
-  rmSync(job.outputPath, { force: true })
+  cleanupPartial(job, job.options)
   settle(job, 'canceled')
 }
 

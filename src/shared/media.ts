@@ -7,6 +7,8 @@ export const MEDIA_EXTENSIONS = [
   'webm',
   'flv',
   'ts',
+  'm3u8',
+  'm3u',
   'm4v',
   'mp3',
   'wav',
@@ -18,8 +20,17 @@ export const MEDIA_EXTENSIONS = [
   'gif'
 ]
 
-export function isMediaFile(fileName: string): boolean {
+function extensionOf(fileName: string): string {
   const dot = fileName.lastIndexOf('.')
-  if (dot === -1) return false
-  return MEDIA_EXTENSIONS.includes(fileName.slice(dot + 1).toLowerCase())
+  return dot === -1 ? '' : fileName.slice(dot + 1).toLowerCase()
+}
+
+export function isMediaFile(fileName: string): boolean {
+  return MEDIA_EXTENSIONS.includes(extensionOf(fileName))
+}
+
+/** HLS 播放列表：需要放开协议白名单，否则引用网络分片时会被拒绝 */
+export function isPlaylistPath(filePath: string): boolean {
+  const ext = extensionOf(filePath)
+  return ext === 'm3u8' || ext === 'm3u'
 }

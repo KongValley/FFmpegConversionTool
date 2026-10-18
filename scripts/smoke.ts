@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildFfmpegArgs } from '../src/shared/args'
 import { downloadAndExtract } from '../src/main/ffmpeg/download'
@@ -25,7 +25,11 @@ const base: EncodeOptions = {
   channels: 'source',
   sampleRate: null,
   extraArgs: '',
-  hwaccel: false
+  hwaccel: false,
+  videoCopy: false,
+  imageMode: 'single',
+  imageTimeSec: 1,
+  imageIntervalSec: 1
 }
 
 async function ensureFfmpeg(): Promise<void> {
@@ -118,16 +122,112 @@ async function audioCodecOf(file: string): Promise<string> {
   return result.stdout.trim()
 }
 
-async function convert(label: string, options: EncodeOptions, ext: string, nvenc: NvencSupport): Promise<string> {
+async function convert(
+  label: string,
+  options: EncodeOptions,
+  ext: string,
+  nvenc: NvencSupport,
+  inputSource = inputPath
+): Promise<string> {
   const output = join(baseDir, `${label}.${ext}`)
   rmSync(output, { force: true })
-  const { args, usedGpu } = buildFfmpegArgs(inputPath, output, options, nvenc)
+  const { args, usedGpu } = buildFfmpegArgs(inputSource, output, options, nvenc)
   const result = await runCommand(ffmpegPath, args, 300_000)
   if (result.code !== 0) throw new Error(`${label} 转换失败（退出码 ${result.code}）：\n${result.stderr.slice(-800)}`)
   const size = readFileSync(output).length
   if (size === 0) throw new Error(`${label} 输出为空文件`)
   console.log(`PASS ${label}${usedGpu ? ' (GPU)' : ''} -> ${output}`)
   return output
+}
+
+/** TS 分片：验证 mpegts 输入 + 复制封装 */
+async function makeTransportStream(): Promise<string> {
+  const output = join(baseDir, 'input.ts')
+  rmSync(output, { force: true })
+  const result = await runCommand(
+    ffmpegPath,
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc2=duration=3:size=640x360:rate=30',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=3',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-c:a',
+      'aac',
+      '-f',
+      'mpegts',
+      output
+    ],
+    120_000
+  )
+  if (result.code !== 0) throw new Error(`生成 TS 输入失败：\n${result.stderr.slice(-800)}`)
+  return output
+}
+
+/** 本地 HLS：播放列表 + 分片，验证 m3u8 输入与协议白名单 */
+async function makeHls(): Promise<string> {
+  const dir = join(baseDir, 'hls')
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(dir, { recursive: true })
+  const playlist = join(dir, 'index.m3u8')
+  const result = await runCommand(
+    ffmpegPath,
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc2=duration=3:size=640x360:rate=30',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=3',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-c:a',
+      'aac',
+      '-f',
+      'hls',
+      '-hls_time',
+      '1',
+      '-hls_playlist_type',
+      'vod',
+      '-hls_segment_filename',
+      join(dir, 'seg%03d.ts'),
+      playlist
+    ],
+    120_000
+  )
+  if (result.code !== 0) throw new Error(`生成 HLS 输入失败：\n${result.stderr.slice(-800)}`)
+  return playlist
+}
+
+/** 图片序列：输出目录内的连续编号帧 */
+async function runImageSequence(nvenc: NvencSupport): Promise<void> {
+  const dir = join(baseDir, 'image-sequence')
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(dir, { recursive: true })
+  const { args } = buildFfmpegArgs(
+    inputPath,
+    join(dir, '%04d.png'),
+    { ...base, presetId: 'png', imageMode: 'sequence', imageIntervalSec: 1 },
+    nvenc
+  )
+  const result = await runCommand(ffmpegPath, args, 120_000)
+  if (result.code !== 0) throw new Error(`image-sequence 转换失败：\n${result.stderr.slice(-800)}`)
+  const frames = readdirSync(dir).filter((file) => file.endsWith('.png')).sort()
+  if (frames.length !== 3 || frames[0] !== '0001.png') throw new Error(`序列帧异常：${frames.join(', ')}`)
+  console.log(`PASS image-sequence（${frames.length} 帧）-> ${dir}`)
 }
 
 async function main(): Promise<void> {
@@ -159,6 +259,28 @@ async function main(): Promise<void> {
   const gifOut = await convert('gif', { ...base, presetId: 'gif' }, 'gif', nvenc)
   const header = readFileSync(gifOut).subarray(0, 6).toString('latin1')
   if (!header.startsWith('GIF89a') && !header.startsWith('GIF87a')) throw new Error(`gif 用例文件头异常：${header}`)
+
+  const tsInput = await makeTransportStream()
+  const tsOut = await convert('ts-to-mp4-copy', { ...base, videoCopy: true }, 'mp4', nvenc, tsInput)
+  if ((await videoCodecOf(tsOut)) !== 'h264') throw new Error('TS 复制封装输出编码不是 h264')
+  if ((await audioCodecOf(tsOut)) !== 'aac') throw new Error('TS 复制封装输出音频不是 aac')
+
+  const hlsInput = await makeHls()
+  const hlsOut = await convert('hls-to-mp4', { ...base, resolution: '720p' }, 'mp4', nvenc, hlsInput)
+  if ((await videoCodecOf(hlsOut)) !== 'h264') throw new Error('HLS 转换输出编码不是 h264')
+
+  const audioCopyOut = await convert('audio-copy', { ...base, presetId: 'audio-copy' }, 'm4a', nvenc)
+  if ((await audioCodecOf(audioCopyOut)) !== 'aac') throw new Error('原始音轨输出音频不是 aac')
+  if ((await videoCodecOf(audioCopyOut)) !== '') throw new Error('原始音轨不应包含视频流')
+
+  const oggOut = await convert('ogg-opus', { ...base, presetId: 'ogg-opus' }, 'ogg', nvenc)
+  if ((await audioCodecOf(oggOut)) !== 'opus') throw new Error('OGG 输出音频不是 opus')
+
+  const imageOut = await convert('image-single', { ...base, presetId: 'png', imageTimeSec: 1 }, 'png', nvenc)
+  const pngHeader = readFileSync(imageOut).subarray(0, 8)
+  if (pngHeader.toString('latin1') !== '\x89PNG\r\n\x1a\n') throw new Error('单帧截图文件头不是 PNG')
+
+  await runImageSequence(nvenc)
 
   console.log('冒烟测试全部通过')
 }

@@ -10,7 +10,11 @@ export const DEFAULT_ADVANCED: AdvancedOptions = {
   channels: 'source',
   sampleRate: null,
   extraArgs: '',
-  hwaccel: false
+  hwaccel: false,
+  videoCopy: false,
+  imageMode: 'single',
+  imageTimeSec: 1,
+  imageIntervalSec: 1
 }
 
 export const DEFAULT_SETTINGS: Settings = {

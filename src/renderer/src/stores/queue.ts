@@ -35,7 +35,11 @@ export function currentOptions(): EncodeOptions {
     channels: state.advanced.channels,
     sampleRate: state.advanced.sampleRate,
     extraArgs: state.advanced.extraArgs,
-    hwaccel: state.advanced.hwaccel
+    hwaccel: state.advanced.hwaccel,
+    videoCopy: state.advanced.videoCopy,
+    imageMode: state.advanced.imageMode,
+    imageTimeSec: state.advanced.imageTimeSec,
+    imageIntervalSec: state.advanced.imageIntervalSec
   }
 }
 

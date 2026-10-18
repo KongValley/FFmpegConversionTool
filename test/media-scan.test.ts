@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expandMediaPaths } from '../src/main/media-scan'
+import { isMediaFile } from '../src/shared/media'
 
 const root = join(process.cwd(), 'tmp', 'test-scan')
 const dir = join(root, 'media')
@@ -48,4 +49,12 @@ test('expandMediaPaths', async (t) => {
     const result = expandMediaPaths([file, file, dir])
     assert.deepEqual(result.files, [file, join(sub, 'b.mp3')])
   })
+})
+
+test('媒体扩展名包含 HLS 播放列表', () => {
+  assert.equal(isMediaFile('a.m3u8'), true)
+  assert.equal(isMediaFile('A.M3U'), true)
+  assert.equal(isMediaFile('a.ts'), true)
+  assert.equal(isMediaFile('a.txt'), false)
+  assert.equal(isMediaFile('noext'), false)
 })

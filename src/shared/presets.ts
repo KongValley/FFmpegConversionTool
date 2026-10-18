@@ -8,10 +8,12 @@ export interface PresetDef {
   id: PresetId
   label: string
   ext: string
-  kind: 'video' | 'audio' | 'gif'
+  kind: 'video' | 'audio' | 'gif' | 'image'
   videoCodec: VideoCodec | null
   nvenc: NvencEncoder | null
   audioCodec: AudioEncoder | null
+  /** 原始音轨：-c:a copy，输出扩展名按源音频编码决定 */
+  audioCopy?: boolean
 }
 
 export const PRESETS: Record<PresetId, PresetDef> = {
@@ -60,6 +62,24 @@ export const PRESETS: Record<PresetId, PresetDef> = {
     nvenc: 'hevc_nvenc',
     audioCodec: 'aac'
   },
+  'mkv-h264': {
+    id: 'mkv-h264',
+    label: 'MKV (H.264)',
+    ext: 'mkv',
+    kind: 'video',
+    videoCodec: 'h264',
+    nvenc: 'h264_nvenc',
+    audioCodec: 'aac'
+  },
+  'mov-h264': {
+    id: 'mov-h264',
+    label: 'MOV (H.264)',
+    ext: 'mov',
+    kind: 'video',
+    videoCodec: 'h264',
+    nvenc: 'h264_nvenc',
+    audioCodec: 'aac'
+  },
   mp3: {
     id: 'mp3',
     label: 'MP3',
@@ -96,11 +116,57 @@ export const PRESETS: Record<PresetId, PresetDef> = {
     nvenc: null,
     audioCodec: 'flac'
   },
+  'ogg-opus': {
+    id: 'ogg-opus',
+    label: 'OGG (Opus)',
+    ext: 'ogg',
+    kind: 'audio',
+    videoCodec: null,
+    nvenc: null,
+    audioCodec: 'libopus'
+  },
+  aac: {
+    id: 'aac',
+    label: 'AAC (.aac)',
+    ext: 'aac',
+    kind: 'audio',
+    videoCodec: null,
+    nvenc: null,
+    audioCodec: 'aac'
+  },
+  'audio-copy': {
+    id: 'audio-copy',
+    label: '原始音轨（不重编码）',
+    ext: 'mka',
+    kind: 'audio',
+    videoCodec: null,
+    nvenc: null,
+    audioCodec: null,
+    audioCopy: true
+  },
   gif: {
     id: 'gif',
     label: 'GIF',
     ext: 'gif',
     kind: 'gif',
+    videoCodec: null,
+    nvenc: null,
+    audioCodec: null
+  },
+  png: {
+    id: 'png',
+    label: 'PNG 图片',
+    ext: 'png',
+    kind: 'image',
+    videoCodec: null,
+    nvenc: null,
+    audioCodec: null
+  },
+  jpg: {
+    id: 'jpg',
+    label: 'JPG 图片',
+    ext: 'jpg',
+    kind: 'image',
     videoCodec: null,
     nvenc: null,
     audioCodec: null
@@ -112,5 +178,26 @@ export const PRESET_LIST: PresetDef[] = Object.values(PRESETS)
 export const PRESET_GROUPS: { label: string; presets: PresetDef[] }[] = [
   { label: '视频', presets: PRESET_LIST.filter((p) => p.kind === 'video') },
   { label: '音频', presets: PRESET_LIST.filter((p) => p.kind === 'audio') },
-  { label: '动图', presets: PRESET_LIST.filter((p) => p.kind === 'gif') }
+  { label: '动图', presets: PRESET_LIST.filter((p) => p.kind === 'gif') },
+  { label: '图片', presets: PRESET_LIST.filter((p) => p.kind === 'image') }
 ]
+
+const AUDIO_COPY_EXT: Record<string, string> = {
+  aac: 'm4a',
+  mp3: 'mp3',
+  opus: 'opus',
+  vorbis: 'ogg',
+  flac: 'flac',
+  alac: 'm4a',
+  pcm_s16le: 'wav',
+  pcm_s24le: 'wav',
+  pcm_s32le: 'wav',
+  pcm_f32le: 'wav',
+  ac3: 'ac3',
+  eac3: 'eac3'
+}
+
+/** 原始音轨提取的输出扩展名：未知编码落到 Matroska 音频容器 */
+export function audioCopyExt(audioCodec?: string): string {
+  return (audioCodec && AUDIO_COPY_EXT[audioCodec]) || 'mka'
+}

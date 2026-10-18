@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
 import { MEDIA_EXTENSIONS } from '../shared/media'
@@ -112,7 +113,15 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.settingsGet, () => getSettings())
   ipcMain.handle(IPC.settingsSet, (_event, patch: Partial<Settings>) => setSettings(patch))
-  ipcMain.handle(IPC.shellReveal, (_event, path: string) => shell.showItemInFolder(path))
+  ipcMain.handle(IPC.shellReveal, (_event, path: string) => {
+    // 图片序列的输出是目录，直接打开；其余定位到文件
+    try {
+      if (statSync(path).isDirectory()) return shell.openPath(path)
+    } catch {
+      // 路径不存在时按文件处理，让系统给出默认行为
+    }
+    return shell.showItemInFolder(path)
+  })
 }
 
 function createWindow(): void {

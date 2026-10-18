@@ -1,5 +1,6 @@
 import type { EncodeOptions, NvencSupport, Resolution } from './types'
 import { PRESETS, type PresetDef, type VideoCodec } from './presets'
+import { isPlaylistPath } from './media'
 
 const CPU_ENCODER: Record<VideoCodec, string> = {
   h264: 'libx264',
@@ -81,6 +82,13 @@ function customSize(resolution: Resolution): [number, number] | null {
   return [Number(match[1]), Number(match[2])]
 }
 
+/** 非 source 时的等比缩放表达式（宽高按自定义值精确缩放） */
+function scaleExpression(resolution: Resolution): string | null {
+  if (resolution === 'source') return null
+  const size = customSize(resolution)
+  return size ? `scale=${size[0]}:${size[1]}` : `scale=-2:${RESOLUTION_HEIGHTS[resolution]}`
+}
+
 function resolveVideoEncoder(
   preset: PresetDef,
   o: EncodeOptions,
@@ -107,14 +115,8 @@ function videoArgs(encoder: string, o: EncodeOptions): string[] {
   return args
 }
 
-function videoFilterArgs(o: EncodeOptions): string[] {
-  if (o.resolution === 'source') return []
-  const size = customSize(o.resolution)
-  const scale = size ? `scale=${size[0]}:${size[1]}` : `scale=-2:${RESOLUTION_HEIGHTS[o.resolution]}`
-  return ['-vf', scale]
-}
-
 function audioArgs(preset: PresetDef, o: EncodeOptions): string[] {
+  if (preset.audioCopy) return ['-c:a', 'copy']
   // 音频预设固定用预设编码器（避免 AAC 写进 .mp3）；视频预设允许在 aac/mp3/opus 间覆盖，
   // WebM 容器强制 Opus。
   const codec =
@@ -131,10 +133,13 @@ function audioArgs(preset: PresetDef, o: EncodeOptions): string[] {
   return args
 }
 
-function containerArgs(preset: PresetDef): string[] {
+/** 容器相关参数按实际输出扩展名判断：原始音轨与图片序列的输出名是动态的 */
+function containerArgs(preset: PresetDef, output: string): string[] {
+  const dot = output.lastIndexOf('.')
+  const outExt = dot === -1 ? '' : output.slice(dot + 1).toLowerCase()
   const args: string[] = []
-  if (preset.ext === 'mp4' || preset.ext === 'm4a') args.push('-movflags', '+faststart')
-  if (preset.ext === 'mp4' && preset.videoCodec === 'h265') args.push('-tag:v', 'hvc1')
+  if (outExt === 'mp4' || outExt === 'm4a') args.push('-movflags', '+faststart')
+  if (outExt === 'mp4' && preset.videoCodec === 'h265') args.push('-tag:v', 'hvc1')
   return args
 }
 
@@ -146,8 +151,14 @@ export function buildFfmpegArgs(
 ): { args: string[]; usedGpu: boolean } {
   const preset = PRESETS[o.presetId]
   const args = ['-hide_banner', '-nostdin', '-loglevel', 'warning', '-progress', 'pipe:1', '-nostats', '-y']
-  // -hwaccel 是输入选项，必须排在 -i 之前；音频与 GIF 预设保持纯 CPU
-  if (o.hwaccel && preset.kind === 'video') args.push('-hwaccel', 'cuda')
+  // 本地 m3u8 可能引用网络分片，必须放开协议白名单
+  if (isPlaylistPath(input)) args.push('-protocol_whitelist', 'file,http,https,tcp,tls,crypto')
+  // 单帧截图用输入级 -ss 快速定位
+  if (preset.kind === 'image' && o.imageMode === 'single') {
+    args.push('-ss', String(Math.max(0, o.imageTimeSec)))
+  }
+  // -hwaccel 是输入选项，必须排在 -i 之前；音频/GIF/图片与复制模式都用不到
+  if (o.hwaccel && preset.kind === 'video' && !o.videoCopy) args.push('-hwaccel', 'cuda')
   args.push('-i', input)
   let usedGpu = false
 
@@ -160,20 +171,34 @@ export function buildFfmpegArgs(
       '-loop',
       '0'
     )
+  } else if (preset.kind === 'image') {
+    args.push('-map', '0:v:0?', '-an', '-sn', '-dn')
+    const filters: string[] = []
+    if (o.imageMode === 'sequence') filters.push(`fps=1/${Math.max(1, Math.round(o.imageIntervalSec))}`)
+    const scale = scaleExpression(o.resolution)
+    if (scale) filters.push(scale)
+    if (filters.length > 0) args.push('-vf', filters.join(','))
+    if (o.imageMode === 'single') args.push('-frames:v', '1', '-update', '1')
+    if (preset.ext === 'jpg') args.push('-q:v', '2')
   } else {
     if (preset.kind === 'audio') {
       args.push('-map', '0:a:0?', '-vn', '-sn', '-dn')
     } else {
       args.push('-map', '0:v:0?', '-map', '0:a:0?', '-sn', '-dn')
-      const encoder = resolveVideoEncoder(preset, o, nvenc)
-      usedGpu = encoder.gpu
-      args.push(...videoArgs(encoder.name, o), '-pix_fmt', 'yuv420p')
-      args.push(...videoFilterArgs(o))
-      if (o.fps !== null && Number.isFinite(o.fps) && o.fps > 0) args.push('-r', String(o.fps))
+      if (o.videoCopy) {
+        args.push('-c:v', 'copy')
+      } else {
+        const encoder = resolveVideoEncoder(preset, o, nvenc)
+        usedGpu = encoder.gpu
+        args.push(...videoArgs(encoder.name, o), '-pix_fmt', 'yuv420p')
+        const scale = scaleExpression(o.resolution)
+        if (scale) args.push('-vf', scale)
+        if (o.fps !== null && Number.isFinite(o.fps) && o.fps > 0) args.push('-r', String(o.fps))
+      }
     }
     args.push(...audioArgs(preset, o))
   }
 
-  args.push(...containerArgs(preset), ...splitExtraArgs(o.extraArgs), output)
+  args.push(...containerArgs(preset, output), ...splitExtraArgs(o.extraArgs), output)
   return { args, usedGpu }
 }
