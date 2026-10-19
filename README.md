@@ -114,7 +114,7 @@ Windows 10/11 x64 桌面端音视频批量转换工具：Electron + Vue 3 + FFmp
 
 | 场景 | 操作 | 结果 |
 |---|---|---|
-| 本地自用 | `npm run dist` | 只在 `release/` 生成 zip，不发布（`--publish never`） |
+| 本地自用 | `npm run dist` | 只在 `release/` 生成 zip 和已解压的 `win-unpacked/`，不发布（`--publish never`） |
 | 云端发布 | `git tag v0.8.0 && git push origin v0.8.0` | 触发 `.github/workflows/release.yml`：类型检查 + 单元测试 → 打包 → 发布 GitHub Release（附件即 zip） |
 | 仅构建不发版 | Actions 页面手动 `Run workflow` | 上传构建物到该次运行的 Artifacts，不创建 Release |
 
@@ -131,7 +131,7 @@ npm run dev        # 开发模式启动（electron-vite + HMR）
 npm run typecheck  # vue-tsc + tsc，零告警
 npm test           # 单元测试：参数生成、进度解析、路径扫描、剪辑时长与合并校验
 npm run smoke      # 真实转码冒烟：CPU/GPU 编码、硬件解码、TS→MP4 复制、HLS、音频互转、图片帧、时间裁剪、无损合并（首次约 200MB 下载）
-npm run dist       # 打包免安装 zip 到 release/
+npm run dist       # 打包免安装 zip + 已解压目录到 release/
 ```
 
 ```
